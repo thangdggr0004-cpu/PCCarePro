@@ -23,6 +23,7 @@ log = "0.4"
 tauri = { version = "2.11.3", features = ["tray-icon", "custom-protocol"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 open = "5"
 tokio = { version = "1", features = ["process", "macros", "sync", "time", "rt", "rt-multi-thread"] }
 

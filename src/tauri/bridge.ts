@@ -1,11 +1,12 @@
 /**
  * Tauri Bridge — 1:1 mapping of all electronAPI methods
- * 58 methods, matched exactly to what the frontend calls.
+ * 62 methods, matched exactly to what the frontend calls.
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { check as updaterCheck, type Update } from '@tauri-apps/plugin-updater';
 
 let appWindow: any = null;
 try {
@@ -168,15 +169,91 @@ export const tauriBridge = {
   verifyCleanOperation: () => safeInvokeRaw('verify_clean_operation'),
   verifyBiosRestore: (scanResult?: any) => safeInvokeRaw('verify_bios_restore', { scanResult }),
 
-  // ── Auto Updater ───────────────────────────
-  checkForUpdates: () => safeInvoke('check_for_updates'),
-  downloadUpdate: () => safeInvoke('download_update'),
-  installUpdate: () => safeInvoke('install_update'),
+  // ── Auto Updater (tauri-plugin-updater) ──────
+  checkForUpdates: () => checkForUpdatesBridge(),
+  downloadUpdate: () => downloadUpdateBridge(),
+  installUpdate: () => installUpdateBridge(),
   onUpdaterEvent: (callback: (event: any) => void) => {
-    const unlisten = listen<any>('updater-event', (event) => callback(event.payload));
-    return () => { unlisten.then((fn) => fn()); };
+    updaterListeners.add(callback);
+    return () => { updaterListeners.delete(callback); };
   },
 };
+
+// ── Auto Updater bridge helpers ───────────────
+
+let pendingUpdate: Update | null = null;
+let downloadPromise: Promise<void> | null = null;
+const updaterListeners = new Set<(event: any) => void>();
+
+function emitUpdater(event: any) {
+  updaterListeners.forEach((cb) => {
+    try { cb(event); } catch (e) { console.warn('[TauriBridge] updater listener error:', e); }
+  });
+}
+
+async function checkForUpdatesBridge(): Promise<any> {
+  try {
+    const update = await updaterCheck();
+    if (!update) {
+      return { ok: true, success: true, hasUpdate: false, message: 'Bạn đang sử dụng phiên bản mới nhất.' };
+    }
+    pendingUpdate = update;
+    emitUpdater({
+      type: 'update-available',
+      info: {
+        currentVersion: update.currentVersion || '?',
+        latestVersion: update.version,
+        releaseNotes: update.body || 'Đã có bản cập nhật mới trên GitHub.',
+      },
+    });
+    return { ok: true, success: true, hasUpdate: true, latestVersion: update.version };
+  } catch (e: any) {
+    console.warn('[TauriBridge] checkForUpdates:', e?.message || e);
+    return { ok: false, success: false, error: String(e?.message || e) };
+  }
+}
+
+async function downloadUpdateBridge(): Promise<any> {
+  try {
+    if (!pendingUpdate) return { ok: false, success: false, error: 'Chưa có bản cập nhật. Hãy kiểm tra cập nhật trước.' };
+    if (!downloadPromise) {
+      let total = 0;
+      let gotten = 0;
+      downloadPromise = pendingUpdate.download((evt) => {
+        if (evt.event === 'Started') {
+          total = evt.data.contentLength || 0;
+        } else if (evt.event === 'Progress') {
+          gotten += evt.data.chunkLength;
+          if (total > 0) {
+            emitUpdater({ type: 'download-progress', progress: { percent: Math.min(100, Math.round((gotten / total) * 100)) } });
+          }
+        } else if (evt.event === 'Finished') {
+          emitUpdater({ type: 'download-progress', progress: { percent: 100 } });
+          emitUpdater({ type: 'update-downloaded' });
+        }
+      }).catch((e: any) => { downloadPromise = null; throw e; });
+    }
+    await downloadPromise;
+    return { ok: true, success: true, downloaded: true };
+  } catch (e: any) {
+    downloadPromise = null;
+    emitUpdater({ type: 'error', error: String(e?.message || e) });
+    return { ok: false, success: false, error: String(e?.message || e) };
+  }
+}
+
+async function installUpdateBridge(): Promise<any> {
+  try {
+    if (!pendingUpdate) return { ok: false, success: false, error: 'Chưa tải file cập nhật.' };
+    if (!downloadPromise) {
+      await downloadUpdateBridge();
+    }
+    await pendingUpdate.install();
+    return { ok: true, success: true };
+  } catch (e: any) {
+    return { ok: false, success: false, error: String(e?.message || e) };
+  }
+}
 
 // ── Polyfill window.electronAPI + window.electron ──
 

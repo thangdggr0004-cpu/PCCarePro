@@ -30,6 +30,7 @@
     "dialog:allow-confirm",
     "dialog:allow-open",
     "dialog:allow-save",
-    "log:default"
+    "log:default",
+    "updater:default"
   ]
 }
