@@ -641,6 +641,32 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
         stepCount = $actions.Count
     }
 
+    # --- IMPACT ANALYZER (mirrors Electron V3 ImpactAnalyzer.analyze) ---
+    $riskLevel = "LOW"
+    $isSafeToProceed = $true
+    $officeImpact = "Không làm gián đoạn ứng dụng Office."
+    $windowsImpact = "Không tác động tệp hệ thống Windows System32."
+    $clickToRunImpact = "Dịch vụ ClickToRun duy trì bình thường."
+    $licenseImpact = "Bảo lưu giấy phép hợp lệ đang có."
+
+    if ($surgicalPlan.requiresSfcScan) {
+        $riskLevel = "MEDIUM"
+        $windowsImpact = "Kiểm tra và nạp lại DLL chuẩn từ WinSXS."
+    }
+
+    if ($surgicalPlan.requiresServiceReset) {
+        $clickToRunImpact = "Khởi động lại dịch vụ ClickToRunSvc."
+    }
+
+    $impactResult = @{
+        riskLevel = $riskLevel
+        officeImpact = $officeImpact
+        windowsImpact = $windowsImpact
+        clickToRunImpact = $clickToRunImpact
+        licenseImpact = $licenseImpact
+        isSafeToProceed = $isSafeToProceed
+    }
+
     # --- DECISION ENGINE ---
     $hasFailures = ($matrix | Where-Object { $_.status -eq "FAIL" }).Count -gt 0
     $actionAllowed = if ($hasFailures) { "ALLOW_RESTORE" } else { "ALLOW_RESTORE" }
@@ -699,6 +725,7 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
                 "Trạng thái cấp phép: $($licData.licenseStatus) ($($licData.licenseName))"
             )
         }
+        impactResult = $impactResult
         surgicalPlan = $surgicalPlan
         matrix = $matrix
         auditLogs = $auditLogs
@@ -980,6 +1007,15 @@ mod tests {
         let res = scan_office_activation().expect("Should succeed");
         assert!(res["report"]["skuInfo"].is_object(), "report.skuInfo must be an object");
         assert!(res["report"]["matrix"].is_array(), "report.matrix must be an array");
+        assert!(res["report"]["impactResult"].is_object(), "report.impactResult must be an object");
+        assert!(
+            res["report"]["impactResult"]["riskLevel"].is_string(),
+            "report.impactResult.riskLevel must be a string"
+        );
+        assert!(
+            res["report"]["impactResult"]["isSafeToProceed"].is_boolean(),
+            "report.impactResult.isSafeToProceed must be a boolean"
+        );
     }
 }
 
