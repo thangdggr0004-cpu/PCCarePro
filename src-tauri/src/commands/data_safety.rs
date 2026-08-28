@@ -78,36 +78,46 @@ pub fn rollback_backup(backup_id: &str) -> Result<serde_json::Value, String> {
     $manifest = if (Test-Path $manifestFile) {{ Get-Content $manifestFile -Raw | ConvertFrom-Json }} else {{ $null }}
     $restored = @()
     $failed = @()
+    $detail = @()
 
     if ($manifest -and $manifest.items) {{
         foreach ($item in $manifest.items) {{
+            $reason = 'Đã phục hồi'
+            $status = 'restored'
             if ($item.type -eq 'reg' -and $item.path -and (Test-Path $item.path)) {{
-                & reg.exe import $item.path 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) {{
+                $err = (& reg.exe import $item.path 2>&1 | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null -or $LASTEXITCODE -eq '') {{
                     $restored += $item.path
                 }} else {{
-                    $failed += ($item.path + ' (code ' + $LASTEXITCODE + ')')
+                    $status = 'failed'
+                    $reason = 'reg.exe import lỗi (code ' + $LASTEXITCODE + '): ' + $err
+                    if ($err -match 'registry') {{
+                        $reason = 'Không thể ghi khóa SPP bị Windows chặn quyền (manager/slpp, kể cả tài khoản SYSTEM). Dùng slmgr /ipk để nạp lại key nếu cần.'
+                    }}
+                    $failed += $item.path
                 }}
             }}
             elseif ($item.type -eq 'hosts' -and $item.path -and (Test-Path $item.path)) {{
                 $hostsDst = Join-Path $env:windir 'System32\drivers\etc\hosts'
-                Copy-Item $item.path $hostsDst -Force
-                if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {{
-                    try {{ Copy-Item $item.path $hostsDst -Force -ErrorAction Stop; $restored += $item.path }} catch {{ $failed += $item.path }}
-                }} else {{
-                    $restored += $item.path
+                try {{ Copy-Item $item.path $hostsDst -Force -ErrorAction Stop; $restored += $item.path }} catch {{
+                    $status = 'failed'
+                    $reason = 'Không sao chép được hosts.bak: ' + $_.Exception.Message
+                    $failed += $item.path
                 }}
             }}
+            $detail += @{{ item = $item.path; type = $item.type; status = $status; reason = $reason }}
         }}
     }}
 
+    $failedLines = @($failed | ForEach-Object {{ ' - ' + $_ }})
     @{{
         success = ($failed.Count -eq 0)
         backupId = $backupId
         restored = $restored
         failed = $failed
-        output = 'Đã phục hồi ' + $restored.Count + ' mục; ' + $failed.Count + ' mục lỗi.'
-    }} | ConvertTo-Json -Depth 3
+        detail = $detail
+        output = 'Rollback: Đã phục hồi ' + $restored.Count + ' mục (' + ($restored -join ', ') + '). Thất bại ' + $failed.Count + ' mục (' + ($failed -join ', ') + ').'
+    }} | ConvertTo-Json -Depth 4
     "#,
         id = safe_id
     );

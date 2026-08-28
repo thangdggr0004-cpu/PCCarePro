@@ -6,7 +6,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { check as updaterCheck, type Update } from '@tauri-apps/plugin-updater';
+import { check as updaterCheck } from '@tauri-apps/plugin-updater';
 
 let appWindow: any = null;
 try {
@@ -181,8 +181,6 @@ export const tauriBridge = {
 
 // ── Auto Updater bridge helpers ───────────────
 
-let pendingUpdate: Update | null = null;
-let downloadPromise: Promise<void> | null = null;
 const updaterListeners = new Set<(event: any) => void>();
 
 function emitUpdater(event: any) {
@@ -197,7 +195,6 @@ async function checkForUpdatesBridge(): Promise<any> {
     if (!update) {
       return { ok: true, success: true, hasUpdate: false, message: 'Bạn đang sử dụng phiên bản mới nhất.' };
     }
-    pendingUpdate = update;
     emitUpdater({
       type: 'update-available',
       info: {
@@ -213,30 +210,23 @@ async function checkForUpdatesBridge(): Promise<any> {
   }
 }
 
+/// Portable flow: Rust-side download + signature verify + stage as <exe>.next.
+/// Progress/done are relayed from Tauri events to the same updater event stream.
+listen('portable-update-progress', (e: any) => {
+  emitUpdater({ type: 'download-progress', progress: e.payload });
+}).catch(() => {});
+listen('portable-update-done', () => {
+  emitUpdater({ type: 'update-downloaded' });
+}).catch(() => {});
+
 async function downloadUpdateBridge(): Promise<any> {
   try {
-    if (!pendingUpdate) return { ok: false, success: false, error: 'Chưa có bản cập nhật. Hãy kiểm tra cập nhật trước.' };
-    if (!downloadPromise) {
-      let total = 0;
-      let gotten = 0;
-      downloadPromise = pendingUpdate.download((evt) => {
-        if (evt.event === 'Started') {
-          total = evt.data.contentLength || 0;
-        } else if (evt.event === 'Progress') {
-          gotten += evt.data.chunkLength;
-          if (total > 0) {
-            emitUpdater({ type: 'download-progress', progress: { percent: Math.min(100, Math.round((gotten / total) * 100)) } });
-          }
-        } else if (evt.event === 'Finished') {
-          emitUpdater({ type: 'download-progress', progress: { percent: 100 } });
-          emitUpdater({ type: 'update-downloaded' });
-        }
-      }).catch((e: any) => { downloadPromise = null; throw e; });
+    const res: any = await invoke('portable_update_download');
+    if (res && res.hasUpdate === false) {
+      return { ok: true, success: true, downloaded: false, message: res.message };
     }
-    await downloadPromise;
     return { ok: true, success: true, downloaded: true };
   } catch (e: any) {
-    downloadPromise = null;
     emitUpdater({ type: 'error', error: String(e?.message || e) });
     return { ok: false, success: false, error: String(e?.message || e) };
   }
@@ -244,11 +234,7 @@ async function downloadUpdateBridge(): Promise<any> {
 
 async function installUpdateBridge(): Promise<any> {
   try {
-    if (!pendingUpdate) return { ok: false, success: false, error: 'Chưa tải file cập nhật.' };
-    if (!downloadPromise) {
-      await downloadUpdateBridge();
-    }
-    await pendingUpdate.install();
+    await invoke('portable_update_apply');
     return { ok: true, success: true };
   } catch (e: any) {
     return { ok: false, success: false, error: String(e?.message || e) };

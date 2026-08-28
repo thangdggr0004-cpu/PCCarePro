@@ -600,13 +600,13 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     $confidencePct = if ($totalWeight -gt 0) { [math]::Round(($weightedScore / $totalWeight) * 100) } else { 80 }
 
     $confLevel = if ($confidencePct -ge 95) {
-        @{ label = "Đã xác nhận"; code = "CONFIRMED" }
+        @{ label = "Đã xác nhận"; code = "CONFIRMED"; range = @(95, 100) }
     } elseif ($confidencePct -ge 80) {
-        @{ label = "Rất có khả năng"; code = "HIGHLY_PROBABLE" }
+        @{ label = "Rất có khả năng"; code = "HIGHLY_PROBABLE"; range = @(80, 94) }
     } elseif ($confidencePct -ge 60) {
-        @{ label = "Có dấu hiệu"; code = "INDICATIONS_FOUND" }
+        @{ label = "Có dấu hiệu"; code = "INDICATIONS_FOUND"; range = @(60, 79) }
     } else {
-        @{ label = "Chưa đủ bằng chứng"; code = "INSUFFICIENT" }
+        @{ label = "Chưa đủ bằng chứng"; code = "INSUFFICIENT"; range = @(0, 59) }
     }
 
     # --- SURGICAL RECOVERY PLANNER ---
@@ -676,25 +676,149 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
         "Phát hiện dấu hiệu can thiệp bất thường cần xử lý (" + $confidencePct + "% Confidence)."
     }
 
-    # --- PROVENANCE ---
-    $actMethod = if ($licData.activationType -eq "KMS") {
-        "KMS Client (GVLK)"
-    } elseif ($licData.activationType -eq "Retail") {
-        "Retail Digital License"
-    } elseif ($licData.activationType -eq "MAK") {
-        "MAK Volume License"
-    } else {
-        "OEM / Standard"
+    # --- PROVENANCE (backported Electron ActivationProvenanceAnalyzer — 4-level engine) ---
+    $hasTampering = $hasFailures
+    $kmsHostRaw = $licData.kmsHost
+    $hasKmsHost = ($null -ne $kmsHostRaw -and $kmsHostRaw -ne "N/A" -and $kmsHostRaw.Trim().Length -gt 0)
+    $kmsLibHostInfo = @{
+        host = if ($hasKmsHost) { $kmsHostRaw.Trim() } else { "N/A" }
+        port = 1688
+        dnsResult = "N/A"
+        reachability = if ($hasKmsHost) { "YES" } else { "UNKNOWN" }
+        hostType = "KMS Host = No Data"
     }
 
+    $licName = [string]$licData.licenseName
+    $licDesc = [string]$licData.licenseDescription
+    $actType = [string]$licData.activationType
+    $prodKeyChan = [string]$licData.productKeyChannel
+    $actStatus = [string]$licData.activationState
+
+    $isKmsClient = ($actType -eq "KMS") -or $licName.Contains("_KMS_Client") -or $licName.Contains("GVLK") -or $licDesc.Contains("VOLUME_KMSCLIENT") -or ($prodKeyChan -eq "GVLK") -or $hasKmsHost
+
+    $evidenceUsed = [System.Collections.ArrayList]@()
+    $actMethod = "Không đủ bằng chứng để xác định phương thức kích hoạt."
+    $actSource = "Chưa xác định"
+    $provenanceConfidence = 50
+    if ($null -ne $licData.confidence) { $provenanceConfidence = [int]$licData.confidence }
+    $recommendationText = "Theo dõi & Kiểm tra định kỳ"
+
+    if ($actStatus -eq "LICENSED" -or $isKmsClient) {
+        if ($isKmsClient) {
+            $actMethod = "KMS Client (GVLK)"
+            $provenanceConfidence = 80
+            if ($hasKmsHost) {
+                $hLower = $kmsHostRaw.Trim().ToLower()
+                $kmsLibHostInfo.host = $kmsHostRaw.Trim()
+                $kmsLibHostInfo.port = 1688
+                $kmsLibHostInfo.reachability = "YES"
+                if ($hLower.EndsWith(".local") -or $hLower.EndsWith(".corp") -or $hLower.EndsWith(".lan") -or ($hLower -match "^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)")) {
+                    $kmsLibHostInfo.hostType = "Corporate Internal Host"
+                    $actSource = "Corporate KMS Host ($($kmsHostRaw.Trim()))"
+                    $recommendationText = "KMS Host hoạt động bình thường."
+                } elseif ($hLower.Contains("msguides.com") -or $hLower.Contains("kms") -or ($hLower -match "^\d+\.\d+\.\d+\.\d+$")) {
+                    $kmsLibHostInfo.hostType = "External Public Host"
+                    $actSource = "External Public KMS Host ($($kmsHostRaw.Trim()))"
+                    $recommendationText = "Đây là KMS Host công khai. Hãy xác minh đây có phải môi trường mong muốn của bạn."
+                } else {
+                    $kmsLibHostInfo.hostType = "Unknown Host"
+                    $actSource = "KMS Host: $($kmsHostRaw.Trim())"
+                    $recommendationText = "KMS Host đã được ghi nhận."
+                }
+                [void]$evidenceUsed.Add("ActivationType: KMS, License Name: $licName, KMS Host: $($kmsHostRaw.Trim()), KMS Port: 1688, Host Type: $($kmsLibHostInfo.hostType)")
+            } else {
+                $kmsLibHostInfo.host = "Không đọc được dữ liệu"
+                $kmsLibHostInfo.hostType = "KMS Host = No Data"
+                $actSource = "Không xác định được KMS Host"
+                $recommendationText = "Không xác định được KMS Host từ dữ liệu hiện có. Nếu cần xác minh nguồn kích hoạt, hãy kiểm tra cấu hình KMS bằng các công cụ quản trị Office."
+                [void]$evidenceUsed.Add("ActivationType: KMS, License Name: $licName, Status: LICENSED, Reasoning: KMS Host = No Data (Engine không thu thập được dữ liệu tên Host từ hệ thống).")
+            }
+        } elseif ($licName.Contains("MAK") -or $actType -eq "MAK" -or $prodKeyChan -eq "MAK") {
+            $actMethod = "Volume MAK"
+            $actSource = "Microsoft Multiple Activation Key"
+            $provenanceConfidence = 95
+            $recommendationText = "Giấy phép Volume MAK chính hãng."
+            [void]$evidenceUsed.Add("ActivationType: MAK, License Name: $licName")
+        } elseif ($licData.licenseChannel -eq "Microsoft 365" -or $licName -match "Subscription|365" -or $actType -eq "Subscription") {
+            $actMethod = "Subscription"
+            $actSource = "Microsoft 365 Cloud"
+            $provenanceConfidence = 99
+            $recommendationText = "Đăng ký tài khoản Microsoft 365 Cloud chính hãng."
+            [void]$evidenceUsed.Add("ActivationType: Subscription, License Channel: $($licData.licenseChannel)")
+        } elseif ($licData.licenseChannel -eq "Retail" -or $licName.Contains("Retail") -or $actType -eq "Retail") {
+            $actMethod = "Retail Key"
+            $actSource = "Microsoft Genuine Retail"
+            $provenanceConfidence = 99
+            $recommendationText = "Bản quyền Retail chính hãng của Microsoft."
+            [void]$evidenceUsed.Add("ActivationType: Retail, Partial Key: $($licData.partialKey)")
+        } elseif ($licData.sourcesUsed -contains "LicensingVK_Registry") {
+            $actMethod = "Digital License"
+            $actSource = "Windows Digital Entitlement"
+            $provenanceConfidence = 90
+            $recommendationText = "Bản quyền số Digital License chính hãng."
+            [void]$evidenceUsed.Add("ActivationType: Digital, Source: Registry LicensingVK")
+        } else {
+            $actMethod = "Không đủ bằng chứng để xác định phương thức kích hoạt."
+            $actSource = "Local Licensing Cache"
+            $provenanceConfidence = 60
+            $recommendationText = "Giữ nguyên trạng thái vận hành, theo dõi thêm."
+            [void]$evidenceUsed.Add("Status: LICENSED, Reasoning: Dữ liệu hiện tại chưa đủ đối soát chìa khóa.")
+        }
+    } elseif ($actStatus -eq "UNLICENSED") {
+        $actMethod = "Chưa Kích Hoạt"
+        $actSource = "None"
+        $provenanceConfidence = 100
+        $recommendationText = "Cần nạp khóa bản quyền chính hãng để sử dụng đầy đủ tính năng."
+        [void]$evidenceUsed.Add("Hệ thống chưa tìm thấy chứng chỉ bản quyền hợp lệ.")
+    } elseif ($actStatus -eq "GRACE_PERIOD") {
+        $actMethod = "Thời Gian Gia Hạn (Grace Period)"
+        $actSource = "Trial / Grace License"
+        $provenanceConfidence = 90
+        $recommendationText = "Kích hoạt bản quyền trước khi hết thời gian gia hạn."
+        [void]$evidenceUsed.Add("Đang trong thời gian gia hạn dùng thử (Grace: $($licData.gracePeriod)).")
+    }
+
+    # 4-LEVEL ENTERPRISE EVIDENCE-BASED ACTIVATION ASSESSMENT ENGINE
+    $provenanceLevel = "LEVEL_3_SOURCE_REQUIRES_VERIFICATION"
+    $provenanceLevelText = "NGUỒN KÍCH HOẠT CẦN XÁC MINH THÊM"
+    if ($actMethod -eq "Retail Key" -or $actMethod -eq "Subscription" -or $actMethod -eq "Digital License") {
+        $provenanceLevel = "LEVEL_1_VERIFIED"
+        $provenanceLevelText = "ĐÃ XÁC MINH (VERIFIED)"
+    } elseif ($actMethod -eq "Volume MAK" -and -not $hasTampering) {
+        $provenanceLevel = "LEVEL_2_LIKELY_CONSISTENT"
+        $provenanceLevelText = "RẤT CÓ KHẢ NĂNG ĐỒNG NHẤT (LIKELY CONSISTENT)"
+    } elseif ($isKmsClient -and -not $hasTampering) {
+        $provenanceLevel = "LEVEL_3_SOURCE_REQUIRES_VERIFICATION"
+        $provenanceLevelText = "NGUỒN KÍCH HOẠT CẦN XÁC MINH THÊM (SOURCE REQUIRES VERIFICATION)"
+        $recommendationText = "Nếu cần chứng minh quyền sử dụng hợp lệ, người dùng nên lưu giữ hoặc cung cấp tài liệu cấp phép phù hợp."
+    } elseif ($actStatus -eq "UNLICENSED" -or $hasTampering -or $provenanceConfidence -lt 50) {
+        $provenanceLevel = "LEVEL_4_INSUFFICIENT_EVIDENCE"
+        $provenanceLevelText = "KHÔNG ĐỦ BẰNG CHỨNG (INSUFFICIENT EVIDENCE)"
+    }
+
+    $disclaimerText = "Đánh giá này chỉ phản ánh những bằng chứng Engine đọc được từ hệ thống tại thời điểm kiểm tra. Đánh giá này KHÔNG xác nhận tính hợp pháp của giấy phép. Việc xác minh quyền sử dụng có thể cần các tài liệu ngoài hệ thống."
+    $documentationGuidance = @(
+        "Hóa đơn mua máy hoặc Hóa đơn mua giấy phép Office.",
+        "COA (Certificate of Authenticity) hoặc Thẻ chứa Product Key.",
+        "Product Key được Microsoft hoặc đại lý ủy quyền cấp hợp lệ.",
+        "Email xác nhận mua hàng trực tuyến từ Microsoft Store.",
+        "Thông tin Hợp đồng giấy phép Volume (VLSC / M365 Admin Center) của tổ chức.",
+        "Tài khoản Microsoft (MSA / Work Account) gắn với Digital License."
+    )
+
     $provenance = @{
-        activationStatus = $licData.licenseStatus
+        activationStatus = $actStatus
         activationMethod = $actMethod
-        channel = $licData.licenseChannel
-        isGenuine = (-not $hasFailures -and $isLicensed)
-        confidence = $confidencePct
-        provenanceLevelText = if ($licData.activationType -eq "KMS") { "KÍCH HOẠT DOANH NGHIỆP / VOLUME KMS" } else { "BẢN QUYỀN CHÍNH HÃNG" }
-        kmsHostInfo = @{ host = if ($licData.kmsHost -ne "N/A") { $licData.kmsHost } else { "Không phát hiện máy chủ ngoài" }; port = 1688 }
+        activationSource = $actSource
+        evidenceUsed = $evidenceUsed
+        confidence = $provenanceConfidence
+        recommendation = $recommendationText
+        kmsHostInfo = $kmsLibHostInfo
+        provenanceLevel = $provenanceLevel
+        provenanceLevelText = $provenanceLevelText
+        disclaimerText = $disclaimerText
+        documentationGuidance = $documentationGuidance
+        isGenuine = (-not $hasFailures -and $isLicensed -and $provenanceConfidence -ge 90)
     }
 
     # --- AUDIT LOGS ---
@@ -1016,6 +1140,20 @@ mod tests {
             res["report"]["impactResult"]["isSafeToProceed"].is_boolean(),
             "report.impactResult.isSafeToProceed must be a boolean"
         );
+        let prov = res["report"]["provenance"].clone();
+        assert!(
+            prov.as_object().is_some(),
+            "report.provenance must be an object"
+        );
+        assert!(
+            prov["provenanceLevel"].is_string(),
+            "report.provenance.provenanceLevel must be a string"
+        );
+        assert!(
+            (prov["confidence"].as_u64().unwrap_or(0) as i64) >= 0 && (prov["confidence"].as_u64().unwrap_or(0) as i64) <= 100,
+            "report.provenance.confidence must be in 0..100"
+        );
+        println!("OFFICE PROVENANCE: {}", prov);
     }
 }
 

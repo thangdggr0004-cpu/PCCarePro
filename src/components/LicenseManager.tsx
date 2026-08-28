@@ -466,8 +466,10 @@ export default function LicenseManager() {
   const handleResetActivation = async () => {
       const type = activeTab;
       const confirm = await askConfirm({
-          title: `Xác nhận Đặt lại Trạng thái Cấp phép ${type === 'windows' ? 'Windows' : 'Office'}`,
-          message: `Bạn có chắc chắn muốn xóa thông tin cấp phép ${type === 'windows' ? 'Windows' : 'Office'} hiện tại? Thao tác này sẽ xóa các Product Key và cấu hình KMS hiện có.`,
+          title: `⚠️ Cảnh báo — Xóa Trạng thái Cấp phép ${type === 'windows' ? 'Windows' : 'Office'}`,
+          message: type === 'windows'
+            ? `Thao tác này sẽ XÓA VĨNH VIỄN Product Key Windows và cấu hình KMS hiện tại (slmgr /upk, /cpky, /rearm).\n\nKHÔNG THỂ HOÀN TÁC ĐẦY ĐỦ:\n- Windows sẽ chuyển sang trạng thái CHƯA KÍCH HOẠT.\n- Phần mềm tự động khôi phục CHỈ phục hồi được file hosts.bak; khóa registry bản quyền (SPP) bị Windows chặn quyền ghi kể cả tài khoản SYSTEM, nên KHÔNG tự khôi phục được.\n- Bạn PHẢI có sẵn Original Product Key (paste trên máy / COA / tài khoản Microsoft) để kích hoạt lại thủ công bằng "slmgr /ipk <key>".\n\nChỉ thực hiện khi thực sự cần. Bạn có chắc chắn muốn tiếp tục?`
+            : `Thao tác này sẽ GỠ BỎ các giấy phép Office dư thừa và làm mới dịch vụ cấp phép (ospp.vbs /unpkey).\n\nBạn nên có sẵn tài khoản Microsoft / Product Key Office để kích hoạt lại nếu cần.\n\nBạn có chắc chắn muốn tiếp tục?`,
           type: 'warning',
       });
 

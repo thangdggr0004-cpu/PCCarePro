@@ -2357,8 +2357,12 @@ dependencies = [
 name = "pccare-master-pro"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "base64 0.22.1",
  "log",
+ "minisign-verify",
  "open",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tauri",

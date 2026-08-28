@@ -164,12 +164,12 @@ mod tests {
         let script = r#"
         @{
             msg = "Hệ thống hoàn toàn nguyên bản. Không cần can thiệp khôi phục."
-            level = "KÍCH HOẠT DOANH NGHIỆP / VOLUME KMS"
+            level = "NGUỒN KÍCH HOẠT CẦN XÁC MINH THÊM (SOURCE REQUIRES VERIFICATION)"
         } | ConvertTo-Json
         "#;
         let out = run_ps(script);
         assert!(out.contains("Hệ thống hoàn toàn nguyên bản"));
-        assert!(out.contains("KÍCH HOẠT DOANH NGHIỆP"));
+        assert!(out.contains("NGUỒN KÍCH HOẠT CẦN XÁC MINH THÊM"));
     }
 }
 

@@ -849,7 +849,9 @@ pub fn run() {
             create_backup,
             rollback_backup,
             verify_clean_operation,
-            verify_bios_restore,
+verify_bios_restore,
+            commands::portable_update::portable_update_download,
+            commands::portable_update::portable_update_apply,
             scan_junk,
             clean_junk,
             reset_network_stack,
@@ -886,7 +888,8 @@ create_system_restore_point,
 
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+.setup(|app| {
+            commands::portable_update::cleanup_stale_update();
             if let Ok(mut handle) = TAURI_APP_HANDLE.lock() {
                 *handle = Some(app.handle().clone());
             }

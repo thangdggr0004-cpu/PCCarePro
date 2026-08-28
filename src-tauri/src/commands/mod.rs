@@ -3,6 +3,7 @@ pub mod data_safety;
 pub mod exec;
 pub mod hardware;
 pub mod network;
+pub mod portable_update;
 pub mod power;
 pub mod printer;
 pub mod singleflight;
