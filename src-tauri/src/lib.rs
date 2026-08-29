@@ -575,6 +575,13 @@ async fn rebuild_icon_cache() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn read_tamper_protection() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(windows_settings::read_tamper_protection)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn apply_power_plan(options: serde_json::Value) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let mode = options["mode"].as_str().unwrap_or("balanced").to_string();
@@ -880,6 +887,7 @@ verify_bios_restore,
             run_windows_fixer,
             reset_windows_update,
             rebuild_icon_cache,
+            read_tamper_protection,
             apply_power_plan,
             backup_registry_keys,
             apply_windows_settings,

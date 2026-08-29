@@ -182,6 +182,7 @@ pub fn apply_windows_settings(state: serde_json::Value) -> Result<(), String> {
 /// TaskbarMn, ShowCopilotButton, EnableFeeds (HKLM). Writes run elevated, then restarts
 /// Explorer using the codebase's existing `restart_explorer` mechanism.
 pub fn apply_taskbar_settings(state: serde_json::Value) -> Result<(), String> {
+    cache_clear();
     let b = |key: &str| state[key].as_bool().unwrap_or(false);
     let mut ps = String::new();
 
@@ -272,6 +273,7 @@ pub fn create_system_restore_point(name: &str) -> Result<(), String> {
 /// Runs as ONE elevated PowerShell (like Electron `runPowerShellScriptElevated`), so
 /// admin ops (bcdedit, HKLM, services, restore point) all succeed via single UAC.
 pub fn apply_advanced_optimization(options: serde_json::Value) -> Result<(), String> {
+    cache_clear();
     let mut ps = String::new();
 
     // Create system restore point before any tweak
@@ -368,6 +370,7 @@ pub fn apply_advanced_optimization(options: serde_json::Value) -> Result<(), Str
 /// `restore-advanced-optimization` (electron.cjs L2710-2745). Runs as ONE elevated
 /// PowerShell like Electron (bcdedit/HKLM/service revert all need admin).
 pub fn restore_advanced_optimization() -> Result<(), String> {
+    cache_clear();
     let mut ps = String::new();
 
     // Reset HPET & Dynamic Tick (Electron: deletevalue disabledynamictick + useplatformclock true)
@@ -412,21 +415,41 @@ pub fn restore_advanced_optimization() -> Result<(), String> {
     exec::run_ps_elevated(&ps).map(|_| ())
 }
 
-/// Run SFC / DISM system file checker. Parity 1:1 with Electron `run-windows-fixer`
-/// (electron.cjs L3158-3181): DISM /RestoreHealth (not ScanHealth), runs ONE elevated
-/// PowerShell, returns `details` as the array of static Vietnamese labels joined by `|`.
-/// Uses a long poll deadline because `sfc /scannow` + `DISM /RestoreHealth` can take minutes.
+/// Run SFC / DISM system file checker. Enhanced beyond Electron (electron.cjs L3158-3181):
+/// still runs ONE elevated PowerShell, but now parses the REAL output of `sfc /scannow`
+/// (3 fixed states) and `DISM /RestoreHealth` instead of emitting static labels, and
+/// returns `{ success, details, sfcStatus, sfcCode, dismStatus }` for the UI.
+/// Uses a long poll deadline because both commands can take minutes.
 pub fn run_windows_fixer() -> Result<serde_json::Value, String> {
     let ps = r#"
+function Get-SfcStatus($text) {
+    if ($text -match 'did not find any integrity violations') { return 'Clean' }
+    if ($text -match 'found corrupt files and successfully repaired') { return 'Repaired' }
+    if ($text -match 'was unable to fix some of them') { return 'Failed' }
+    if ($text -match 'could not perform the requested operation') { return 'CannotRun' }
+    return 'Unknown'
+}
+
 $results = @()
 
 # Run SFC
-$sfcResult = & sfc /scannow 2>&1 | Out-String
-$results += "SFC /SCANNOW: Hoàn tất"
+$sfcRaw = (& sfc /scannow 2>&1 | Out-String)
+$sfcCode = Get-SfcStatus $sfcRaw
+$results += "SFC /SCANNOW: $sfcCode"
 
 # Run DISM
-$dismResult = & DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String
-$results += "DISM RestoreHealth: Hoàn tất"
+$dismRaw = (& DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String)
+$dismClean = ($dismRaw -replace '\s+', ' ').Trim()
+if ($dismClean -match 'no component store corruption was detected') {
+    $dismStatus = 'Clean'
+} elseif ($dismClean -match 'the component store corruption was repaired') {
+    $dismStatus = 'Repaired'
+} elseif ($dismClean -match 'restore operation completed successfully') {
+    $dismStatus = 'Clean'
+} else {
+    $dismStatus = 'Unknown'
+}
+$results += "DISM RestoreHealth: $dismStatus"
 
 Write-Output ($results -join "|")
 "#;
@@ -437,8 +460,26 @@ Write-Output ($results -join "|")
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-    Ok(serde_json::json!({ "success": true, "details": details }))
+
+    // Extract sfcStatus / dismStatus from the "KEY: value" detail lines
+    let mut sfc_status = "Unknown".to_string();
+    let mut dism_status = "Unknown".to_string();
+    for d in &details {
+        if let Some(stripped) = d.strip_prefix("SFC /SCANNOW:") {
+            sfc_status = stripped.trim().to_string();
+        } else if let Some(stripped) = d.strip_prefix("DISM RestoreHealth:") {
+            dism_status = stripped.trim().to_string();
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "details": details,
+        "sfcStatus": sfc_status,
+        "dismStatus": dism_status
+    }))
 }
+
 
 /// Reset Windows Update components. Parity 1:1 with Electron `reset-windows-update`
 /// (electron.cjs L3183-3218): stop BITS/wuauserv/appidsvc/cryptsvc, remove the WHOLE
@@ -533,6 +574,7 @@ Write-Output ($results -join "|")
 /// (electron.cjs L2318-2401): every item always contributes one branch (disable OR
 /// enable), and the whole script runs ONCE elevated (`runPowerShellScriptElevated`).
 pub fn apply_system_optimization(state: serde_json::Value) -> Result<(), String> {
+    cache_clear();
     let is_disable = |disable_key: &str, enable_key: &str| {
         state.get(disable_key).and_then(|v| v.as_bool()) == Some(true)
             || state.get(enable_key).and_then(|v| v.as_bool()) == Some(false)
@@ -630,4 +672,25 @@ pub fn get_system_info() -> Result<serde_json::Value, String> {
     let stdout = String::from_utf8_lossy(&exec::run_ps_raw(&ps).stdout).to_string();
     let val: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| e.to_string())?;
     Ok(val)
+}
+
+/// Read Tamper Protection status from Windows Defender.
+/// Registry: HKLM:\SOFTWARE\Microsoft\Windows Defender\Features\TamperProtection
+/// Returns: { "enabled": bool, "managed": bool, "value": u32 }
+pub fn read_tamper_protection() -> Result<serde_json::Value, String> {
+    let ps = r#"
+    try {
+        $val = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Features' -Name 'TamperProtection' -ErrorAction SilentlyContinue).TamperProtection
+        if ($null -ne $val) {
+            @{ value = $val; enabled = $val -eq 1 -or $val -eq 4; managed = $val -eq 4 } | ConvertTo-Json
+        } else {
+            @{ value = 0; enabled = $false; managed = $false } | ConvertTo-Json
+        }
+    } catch {
+        @{ value = 0; enabled = $false; managed = $false; error = $_.Exception.Message } | ConvertTo-Json
+    }
+    "#;
+    let stdout = run_ps(ps);
+    let val: serde_json::Value = serde_json::from_str(exec::extract_json(&stdout)).map_err(|e| format!("Parse error: {}", e))?;
+    Ok(serde_json::json!({ "success": true, "data": val }))
 }

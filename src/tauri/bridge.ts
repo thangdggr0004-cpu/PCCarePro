@@ -116,6 +116,7 @@ export const tauriBridge = {
   runWindowsFixer: () => safeInvokeRaw('run_windows_fixer'),
   resetWindowsUpdate: () => safeInvokeRaw('reset_windows_update'),
   rebuildIconCache: () => safeInvokeRaw('rebuild_icon_cache'),
+  readTamperProtection: () => safeInvokeRaw('read_tamper_protection'),
   applyPowerPlan: (options: { mode: string }) => safeInvokeRaw('apply_power_plan', { options }),
   backupRegistryKeys: () => safeInvokeRaw('backup_registry_keys'),
   applyWindowsSettings: (state: any) => safeInvokeRaw('apply_windows_settings', { state }),

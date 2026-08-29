@@ -92,6 +92,8 @@ export default function WindowsSettings() {
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   const [applyingSection, setApplyingSection] = useState<'system' | 'taskbar' | 'optimization' | null>(null);
   const [successNotice, setSuccessNotice] = useState<{ title: string; message: string; sectionName: string } | null>(null);
+  const [tamperEnabled, setTamperEnabled] = useState<boolean | null>(null);
+  const [tamperManaged, setTamperManaged] = useState<boolean>(false);
 
   // Advanced Optimization Modal State
   const [showAdvancedModal, setShowAdvancedModal] = useState(false);
@@ -138,7 +140,7 @@ export default function WindowsSettings() {
         if (advancedOpts.disableDeliveryOptimization) appliedList.push("Tắt Delivery Optimization");
         if (advancedOpts.enableGameMode) appliedList.push("Kích hoạt Game Mode");
         if (advancedOpts.disableStartupDelay) appliedList.push("Bỏ thời gian chờ khởi động ứng dụng");
-        updateSessionReport({ windowsOptimizations: appliedList });
+        appendWindowsHistory(appliedList.map(x => `✅ [Tối ưu nâng cao] ${x}`));
       } else {
         setAdvancedResult("Lỗi khi áp dụng: " + (res?.error || "Không xác định"));
       }
@@ -158,6 +160,7 @@ export default function WindowsSettings() {
       const res = await (window as any).electronAPI.restoreAdvancedOptimization();
       if (res && res.success) {
         setAdvancedResult("Đã khôi phục toàn bộ cài đặt nâng cao về mặc định của Windows thành công!");
+        appendWindowsHistory(['🔄 [Tối ưu nâng cao] Khôi phục về mặc định (Undo)']);
       } else {
         setAdvancedResult("Lỗi khi khôi phục: " + (res?.error || "Không xác định"));
       }
@@ -206,7 +209,35 @@ export default function WindowsSettings() {
 
   useEffect(() => {
     loadSettings();
+    loadTamperStatus();
   }, []);
+
+  const loadTamperStatus = async () => {
+    try {
+      const res = await (window as any).electronAPI.readTamperProtection();
+      if (res && res.success && res.data) {
+        setTamperEnabled(!!res.data.enabled);
+        setTamperManaged(!!res.data.managed);
+      }
+    } catch (e) {
+      console.error('Tamper Protection read failed:', e);
+    }
+  };
+
+  const [changeHistory, setChangeHistory] = useState<string[]>(() => {
+    try {
+      const rep = JSON.parse(localStorage.getItem('tp_session_audit_report') || '{}');
+      return Array.isArray(rep.windowsOptimizations) ? rep.windowsOptimizations : [];
+    } catch (e) { return []; }
+  });
+
+  const appendWindowsHistory = (entries: string[]) => {
+    setChangeHistory(prev => {
+      const merged = [...entries, ...prev].slice(0, 50);
+      updateSessionReport({ windowsOptimizations: merged });
+      return merged;
+    });
+  };
 
 
   const loadSettings = async (forceRefresh?: boolean) => {
@@ -233,7 +264,11 @@ export default function WindowsSettings() {
 
   const handleChange = (key: keyof typeof state, value: boolean) => {
     if (key === 'defender' && value === false) {
-      const confirm = window.confirm("CẢNH BÁO: Tắt Windows Defender trên các phiên bản Windows mới thường yêu cầu tắt Tamper Protection bằng tay trước. Nếu bạn tắt, máy tính có thể gặp rủi ro bảo mật. Bạn có chắc chắn muốn tắt?");
+      let msg = "CẢNH BÁO: Tắt Windows Defender (DisableAntiSpyware) làm máy tính dễ bị rủi ro bảo mật.\n\nBạn có chắc chắn muốn tắt?";
+      if (tamperEnabled) {
+        msg = "⚠️ TAMPER PROTECTION ĐANG BẬT ⚠️\n\nWindows Defender Tamper Protection hiện đang kích hoạt. Tắt chống xâm nhập của Defender ngăn các thay đổi registry như thế này có hiệu lực.\n\nĐể tắt Defender thực sự, bạn CẦN vào: Cài đặt Windows → Quyền riêng tư & bảo mật → Bảo mật Windows → Bảo vệ chống virus & mối đe dọa → Quản lý bảo vệ → tắt Tamper Protection thủ công trước.\n\n" + (tamperManaged ? "Lưu ý: Tamper Protection đang được quản lý bởi tổ chức/GPO - có thể không tắt thủ công được.\n\n" : "") + "Bạn có chắc chắn vẫn muốn bật cài đặt này (không có hiệu lực khi Tamper Protection bật)?";
+      }
+      const confirm = window.confirm(msg);
       if (!confirm) return;
     }
     setState(prev => ({ ...prev, [key]: value }));
@@ -271,6 +306,25 @@ export default function WindowsSettings() {
       if (result && result.success) {
         const details = result.details ? result.details.join('\n') : '';
         completeTask(taskId, `Đã hoàn tất ${taskTitle} thành công!${details ? '\n' + details : ''}`);
+        // Log real parsed status (SFC: 3 fixed states / DISM) to session history
+        if (action === 'sfc') {
+          const sfcStatus = result.sfcStatus || 'Unknown';
+          const dismStatus = result.dismStatus || 'Unknown';
+          appendWindowsHistory([
+            `🔧 [SFC] ${sfcStatus === 'Clean' ? 'Không phát hiện vi phạm (sạch)'
+              : sfcStatus === 'Repaired' ? 'Phát hiện & sửa thành công file hỏng'
+              : sfcStatus === 'Failed' ? 'Phát hiện file hỏng nhưng KHÔNG sửa được hết'
+              : sfcStatus === 'CannotRun' ? 'Không thể chạy được (thiếu quyền/tồn kho)'
+              : 'Trạng thái không xác định'}`,
+            `🔧 [DISM] ${dismStatus === 'Clean' ? 'Kho thành phần sạch'
+              : dismStatus === 'Repaired' ? 'Đã sửa lỗi kho thành phần'
+              : 'Trạng thái không xác định'}`,
+          ]);
+        } else if (action === 'update') {
+          appendWindowsHistory(['🔧 [Reset Windows Update] Đã reset 4 dịch vụ + SoftwareDistribution + catroot2']);
+        } else if (action === 'icon') {
+          appendWindowsHistory(['🔧 [Icon Cache] Đã rebuild icon cache + thumbnail']);
+        }
       } else {
         failTask(taskId, result?.error || `Có lỗi xảy ra khi thực hiện ${taskTitle}`);
       }
@@ -315,11 +369,46 @@ export default function WindowsSettings() {
         sectionName = 'Taskbar & System Tray';
         res = await (window as any).electronAPI.applyTaskbarSettings(state);
       } else if (type === 'optimization') {
+        // Defender safety guard: if user intends to disable Defender but Tamper Protection is on,
+        // warn and refuse to apply (the change would be ineffective AND misleading).
+        if (state.disableDefender && tamperEnabled) {
+          const proceed = window.confirm(
+            "⚠️ Tamper Protection đang bật — Tắt Defender sẽ KHÔNG có hiệu lực.\n\n" +
+            (tamperManaged
+              ? "Tamper Protection đang được quản lý bởi tổ chức (GPO/Intune).\n\n"
+              : "Hãy tắt Tamper Protection thủ công trong Bảo mật Windows trước, rồi bỏ chọn 'Tắt Defender' và áp dụng lại. Công cụ này không tự tắt hộ bạn.\n\n") +
+            "Bạn có chắc chắn vẫn tiếp tục áp dụng (không có hiệu lực cho phần Defender)?\n[Nhấn OK để tiếp tục, hoặc Cancel để hủy]"
+          );
+          if (!proceed) { setApplyingSection(null); setIsApplyingSettings(false); return; }
+        }
         sectionName = 'Tối ưu hóa Services';
         res = await (window as any).electronAPI.applySystemOptimization(state);
       }
       
       if (res && res.success) {
+        const logItems: string[] = [];
+        if (type === 'system') {
+          logItems.push('Cài đặt hệ thống (Registry)');
+        } else if (type === 'taskbar') {
+          logItems.push('Taskbar & System Tray');
+        } else {
+          const optLabels: Array<[keyof typeof state, string]> = [
+            ['disableHibernate', 'Tắt Hibernate'],
+            ['disableFastStartup', 'Tắt Fast Startup'],
+            ['disablePrefetch', 'Tắt Prefetch'],
+            ['disableSysMain', 'Tắt SysMain'],
+            ['disableRemoteDesktop', 'Tắt Remote Desktop'],
+            ['disableErrorReporting', 'Tắt Error Reporting'],
+            ['disableSearchIndexing', 'Tắt Tìm kiếm ngầm'],
+            ['disablePrintSpooler', 'Tắt Print Spooler'],
+            ['disableDefender', 'Tắt Defender'],
+            ['disableTelemetry', 'Tắt Telemetry'],
+            ['disableXboxServices', 'Tắt dịch vụ Xbox'],
+            ['disableOneDrive', 'Tắt OneDrive'],
+          ];
+          optLabels.forEach(([k, lbl]) => { if (state[k]) logItems.push(lbl); });
+        }
+        appendWindowsHistory(logItems.map(x => `✅ [${sectionName}] ${x}`));
         setSuccessNotice({
           title: `Đã áp dụng thành công: ${sectionName}`,
           message: `Các cấu hình Registry và Services đã được cập nhật vào hệ thống.`,
@@ -593,12 +682,26 @@ export default function WindowsSettings() {
             
             <p className="text-[11px] text-slate-400 mt-4 italic">💡 Tích chọn các mục để TẮT dịch vụ ngầm tương ứng nhằm giải phóng RAM &amp; CPU khi bấm "Áp dụng tối ưu".</p>
 
-            {state.disableDefender && (
+            {state.disableDefender && tamperEnabled && (
               <div className="mt-3 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300 flex items-start gap-2.5 animate-fade-in">
                 <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                 <div className="space-y-0.5">
-                  <strong className="font-bold text-rose-200 block">⚠️ Cảnh báo tắt Windows Defender:</strong>
-                  <p className="text-slate-300">Trên Windows 10/11 mới, bạn cần tắt <strong>Tamper Protection</strong> bằng tay trước. Nếu không tắt, registry key này sẽ KHÔNG có hiệu quả.</p>
+                  <strong className="font-bold text-rose-200 block">⚠️ Tamper Protection ĐANG BẬT — Tắt Defender sẽ KHÔNG có hiệu lực:</strong>
+                  <p className="text-slate-300">
+                    {tamperManaged
+                      ? "Tamper Protection đang được quản lý bởi tổ chức (GPO/Intune). Cần xem chính sách quản trị trước khi tắt Defender."
+                      : "Vào: Cài đặt → Quyền riêng tư & bảo mật → Bảo mật Windows → Bảo vệ chống virus & mối đe dọa → Quản lý bảo vệ → tắt Tamper Protection thủ công trước. Công cụ này KHÔNG tự tắt hộ bạn."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {state.disableDefender && !tamperEnabled && tamperEnabled !== null && (
+              <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300 flex items-start gap-2.5 animate-fade-in">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <strong className="font-bold text-amber-200 block">⚠️ Cảnh báo tắt Windows Defender:</strong>
+                  <p className="text-slate-300">Tamper Protection đang tắt. Registry DisableAntiSpyware có thể có hiệu lực, nhưng việc tắt Defender làm giảm bảo vệ máy tính. Cân nhắc kỹ trước khi áp dụng.</p>
                 </div>
               </div>
             )}
@@ -1009,6 +1112,46 @@ export default function WindowsSettings() {
           </div>
         </div>
       )}
+
+      {/* LỊCH SỬ THAY ĐỔI TRONG PHIÊN (Session Audit) */}
+      <div className="bg-[#101728] rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+        <div className="bg-[#131d33] border-b border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+            <Activity className="w-4 h-4 text-cyan-400" />
+            Lịch Sử Thay Đổi Trong Phiên
+          </h3>
+          {changeHistory.length > 0 && (
+            <button
+              onClick={() => {
+                setChangeHistory([]);
+                updateSessionReport({ windowsOptimizations: [] });
+              }}
+              className="text-[11px] text-slate-400 hover:text-rose-400 font-bold cursor-pointer"
+            >
+              🗑️ Xóa lịch sử
+            </button>
+          )}
+        </div>
+        <div className="p-5">
+          {changeHistory.length === 0 ? (
+            <p className="text-xs text-slate-500 text-center py-4">
+              Chưa có thay đổi nào trong phiên này. Các thao tác Áp dụng / Tối ưu / Sửa lỗi sẽ được ghi lại ở đây.
+            </p>
+          ) : (
+            <ul className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+              {changeHistory.map((entry, i) => (
+                <li
+                  key={`${i}-${entry}`}
+                  className="text-[11px] text-slate-300 bg-[#0e1626] border border-slate-800/80 rounded-lg px-3 py-2 flex items-start gap-2"
+                >
+                  <span className="text-cyan-400 shrink-0 mt-0.5">▸</span>
+                  <span className="break-words">{entry}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
