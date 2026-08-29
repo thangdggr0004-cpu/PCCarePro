@@ -94,6 +94,14 @@ export const tauriBridge = {
   // ── Junk Cleaner ──────────────────────────
   scanJunk: () => safeInvokeRaw('scan_junk'),
   cleanJunk: (categories: string[]) => safeInvokeRaw('clean_junk', { categories }),
+  onJunkScanProgress: (callback: (p: any) => void) => {
+    const unlisten = listen<any>('junk-scan-progress', (e) => callback(e.payload));
+    return () => { unlisten.then((fn) => fn()); };
+  },
+  onJunkCleanProgress: (callback: (p: any) => void) => {
+    const unlisten = listen<any>('junk-clean-progress', (e) => callback(e.payload));
+    return () => { unlisten.then((fn) => fn()); };
+  },
 
   // ── Network ────────────────────────────────
   resetNetworkStack: () => safeInvokeRaw('reset_network_stack'),
@@ -103,7 +111,8 @@ export const tauriBridge = {
   // ── Windows Settings ───────────────────────
   applyAdvancedOptimization: (options: any) => safeInvokeRaw('apply_advanced_optimization', { options }),
   restoreAdvancedOptimization: () => safeInvokeRaw('restore_advanced_optimization'),
-  readWindowsSettings: () => safeInvokeRaw('read_windows_settings'),
+  readWindowsSettings: (opts?: boolean | { forceRefresh?: boolean }) =>
+    safeInvokeRaw('read_windows_settings', opts === true || opts === undefined ? (opts === true ? { opts: true } : {}) : { opts }),
   runWindowsFixer: () => safeInvokeRaw('run_windows_fixer'),
   resetWindowsUpdate: () => safeInvokeRaw('reset_windows_update'),
   rebuildIconCache: () => safeInvokeRaw('rebuild_icon_cache'),

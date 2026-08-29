@@ -1055,65 +1055,227 @@ pub fn restore_oem_bios_key() -> Result<serde_json::Value, String> {
     serde_json::from_str(&stdout).map_err(|e| format!("Parse error: {}", e))
 }
 
-/// Run MAS AIO action (Microsoft Activation Scripts)
+const MAS_CMD_MIN_SIZE: u64 = 10 * 1024;
+const MAS_USER_REPO_URL: &str = "https://raw.githubusercontent.com/thangdggr0004-cpu/ThienPhatTechToolKit/main/MAS_Temp/Microsoft-Activation-Scripts-master/MAS/All-In-One-Version-KL/MAS_AIO.cmd";
+const MAS_OFFICIAL_URL: &str = "https://raw.githubusercontent.com/massgravel/Microsoft-Activation-Scripts/master/MAS/All-In-One-Version-KL/MAS_AIO.cmd";
+
+fn mas_local_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("MAS_AIO.cmd"));
+        candidates.push(cwd.join("MAS").join("MAS_AIO.cmd"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("MAS_AIO.cmd"));
+            candidates.push(dir.join("resources").join("MAS_AIO.cmd"));
+            candidates.push(dir.join("MAS").join("MAS_AIO.cmd"));
+        }
+    }
+    let temp = std::env::temp_dir();
+    candidates.push(temp.join("MAS_AIO.cmd"));
+    candidates.push(std::path::PathBuf::from(r"C:\ProgramData\ThienPhatToolkit\MAS_AIO.cmd"));
+    let mut seen = std::collections::HashSet::new();
+    candidates.into_iter().filter(|p| seen.insert(p.clone())).collect()
+}
+
+fn mas_cmd_eligible(path: &std::path::Path) -> bool {
+    path.is_file()
+        && std::fs::metadata(path)
+            .map(|m| m.len() > MAS_CMD_MIN_SIZE)
+            .unwrap_or(false)
+}
+
+fn search_mas_aio_in_root(root: &std::path::Path, max_depth: usize) -> Option<std::path::PathBuf> {
+    if !root.is_dir() {
+        return None;
+    }
+    fn dfs(dir: &std::path::Path, depth: usize, max_depth: usize) -> Option<std::path::PathBuf> {
+        if depth > max_depth {
+            return None;
+        }
+        let entries = std::fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                if let Some(found) = dfs(&path, depth + 1, max_depth) {
+                    return Some(found);
+                }
+            } else if name.eq_ignore_ascii_case("MAS_AIO.cmd") && mas_cmd_eligible(&path) {
+                return Some(path);
+            }
+        }
+        None
+    }
+    dfs(root, 0, max_depth)
+}
+
+fn find_local_mas_cmd() -> Option<std::path::PathBuf> {
+    for candidate in mas_local_candidates() {
+        if mas_cmd_eligible(&candidate) {
+            return Some(candidate);
+        }
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let base = std::path::PathBuf::from(&profile);
+        for sub in ["Downloads", "Desktop", "Documents"] {
+            if let Some(found) = search_mas_aio_in_root(&base.join(sub), 6) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn ensure_mas_cmd_eol(path: &std::path::Path) {
+    let dest = path.to_string_lossy().replace('\'', "''");
+    let ps = format!(
+        r#"
+        $dest = '{dest}'
+        if (-not (Test-Path $dest)) {{ exit }}
+        $bytes = [IO.File]::ReadAllBytes($dest)
+        $out = New-Object System.Collections.Generic.List[byte]
+        foreach ($b in $bytes) {{
+            if ($b -eq 10) {{
+                if ($out.Count -eq 0 -or $out[$out.Count - 1] -ne 13) {{ $out.Add(13) }}
+                $out.Add(10)
+            }} else {{
+                $out.Add($b)
+            }}
+        }}
+        while ($out.Count -gt 0 -and ($out[$out.Count - 1] -eq 10 -or $out[$out.Count - 1] -eq 13)) {{ $out.RemoveAt($out.Count - 1) }}
+        $out.Add(13); $out.Add(10)
+        [IO.File]::WriteAllBytes($dest, $out.ToArray())
+        "#
+    );
+    let _ = run_ps(&ps);
+}
+
+fn launch_elevated_cmd(cmd_path: &str, param: &str) {
+    let ps_cmd = format!(r#"Start-Process cmd.exe -ArgumentList '/k ""{cmd_path}"" {param}' -Verb RunAs"#);
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_cmd])
+        .spawn();
+}
+
+fn run_mas_online(param: &str) {
+    let ps = format!(
+        r#"
+        $OutputEncoding = [System.Text.Encoding]::UTF8
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $dest = Join-Path $env:TEMP 'MAS_AIO.cmd'
+        if (-not (Test-Path $dest) -or (Get-Item $dest).Length -lt 10000) {{
+            $urls = @(
+                "{MAS_USER_REPO_URL}",
+                "{MAS_OFFICIAL_URL}"
+            )
+            foreach ($u in $urls) {{
+                try {{ curl.exe -sL -o "$dest" "$u" }} catch {{}}
+                if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 10000) {{ break }}
+                try {{
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest -Uri "$u" -OutFile $dest -UseBasicParsing -ErrorAction Stop
+                }} catch {{}}
+                if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 10000) {{ break }}
+            }}
+        }}
+        if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 10000) {{
+            $bytes = [IO.File]::ReadAllBytes($dest)
+            $out = New-Object System.Collections.Generic.List[byte]
+            foreach ($b in $bytes) {{
+                if ($b -eq 10) {{
+                    if ($out.Count -eq 0 -or $out[$out.Count - 1] -ne 13) {{ $out.Add(13) }}
+                    $out.Add(10)
+                }} else {{
+                    $out.Add($b)
+                }}
+            }}
+            while ($out.Count -gt 0 -and ($out[$out.Count - 1] -eq 10 -or $out[$out.Count - 1] -eq 13)) {{ $out.RemoveAt($out.Count - 1) }}
+            $out.Add(13); $out.Add(10)
+            [IO.File]::WriteAllBytes($dest, $out.ToArray())
+            $p = "{param}"
+            Start-Process cmd.exe -ArgumentList "/k ""$dest"" $p" -Verb RunAs
+        }} else {{
+            Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "irm https://get.activated.win | iex"' -Verb RunAs
+        }}
+        "#
+    );
+    let _ = run_ps(&ps);
+}
+
+/// Run MAS AIO action (Microsoft Activation Scripts) - parity with Electron run-mas-action
 pub fn run_mas_action(mode: &str) -> Result<serde_json::Value, String> {
+    let local_cmd = find_local_mas_cmd();
     match mode {
         "aio_menu" => {
-            // Spawn elevated interactive PowerShell window for MAS Menu
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"irm https://get.activated.win | iex\"' -Verb RunAs"])
-                .spawn();
-            Ok(serde_json::json!({
-                "success": true,
-                "output": "Đã khởi chạy cửa sổ kích hoạt MAS AIO Menu chính thức từ Microsoft Activation Scripts."
-            }))
+            if let Some(p) = &local_cmd {
+                ensure_mas_cmd_eol(&p);
+                launch_elevated_cmd(&p.to_string_lossy(), "");
+                let file_name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": format!("Đã mở cửa sổ MAS AIO Menu ({file_name}) thành công!")
+                }))
+            } else {
+                run_mas_online("");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã tải từ máy chủ MAS chính thức và mở MAS AIO Menu thành công!"
+                }))
+            }
         }
         "hwid" => {
-            // Windows HWID permanent activation
-            let script = r#"
-            try {
-                $script = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/massgravel/Microsoft-Activation-Scripts/master/MAS/Separate-Files-Version/Activators/HWID-KMS38_Activation/HWID_Activation.cmd" -ErrorAction Stop
-                $tmp = "$env:TEMP\hwid.cmd"
-                Set-Content -Path $tmp -Value $script -Force
-                $out = & cmd.exe /c "$tmp" /s 2>&1 | Out-String
-                Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-                @{ success=$true; output="Đã thực thi kích hoạt Windows HWID vĩnh viễn thành công!" } | ConvertTo-Json
-            } catch {
-                # Fallback via slmgr generic key & ato
-                & slmgr.vbs /ato 2>&1 | Out-String
-                @{ success=$true; output="Đã hoàn tất gửi yêu cầu bản quyền số Windows Digital License." } | ConvertTo-Json
+            if let Some(p) = &local_cmd {
+                ensure_mas_cmd_eol(&p);
+                launch_elevated_cmd(&p.to_string_lossy(), "/HWID");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã khởi chạy kích hoạt Windows HWID vĩnh viễn qua MAS!"
+                }))
+            } else {
+                run_mas_online("/HWID");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã nạp MAS chính thức và kích hoạt Windows HWID vĩnh viễn!"
+                }))
             }
-            "#;
-            let stdout = run_ps(script);
-            let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({ "success": true, "output": "Đã kích hoạt Windows HWID thành công." }));
-            Ok(parsed)
         }
         "ohook" => {
-            // Office Ohook permanent activation
-            let script = r#"
-            try {
-                $script = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/massgravel/Microsoft-Activation-Scripts/master/MAS/Separate-Files-Version/Activators/Ohook_Activation/Ohook_Activation.cmd" -ErrorAction Stop
-                $tmp = "$env:TEMP\ohook.cmd"
-                Set-Content -Path $tmp -Value $script -Force
-                $out = & cmd.exe /c "$tmp" /s 2>&1 | Out-String
-                Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-                @{ success=$true; output="Đã kích hoạt Office vĩnh viễn qua Ohook Engine thành công!" } | ConvertTo-Json
-            } catch {
-                @{ success=$true; output="Đã hoàn tất cấu hình giấy phép Office." } | ConvertTo-Json
+            if let Some(p) = &local_cmd {
+                ensure_mas_cmd_eol(&p);
+                launch_elevated_cmd(&p.to_string_lossy(), "/Ohook");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã khởi chạy kích hoạt Office Ohook vĩnh viễn qua MAS!"
+                }))
+            } else {
+                run_mas_online("/Ohook");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã nạp MAS chính thức và kích hoạt Office Ohook vĩnh viễn!"
+                }))
             }
-            "#;
-            let stdout = run_ps(script);
-            let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({ "success": true, "output": "Đã kích hoạt Office Ohook thành công." }));
-            Ok(parsed)
         }
         "kms38" => {
-            let script = r#"
-            & slmgr.vbs /ato 2>&1 | Out-String
-            @{ success=$true; output="Đã kích hoạt Windows Server/Enterprise KMS38 tới năm 2038 thành công!" } | ConvertTo-Json
-            "#;
-            let stdout = run_ps(script);
-            let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({ "success": true, "output": "Đã kích hoạt KMS38 thành công." }));
-            Ok(parsed)
+            if let Some(p) = &local_cmd {
+                ensure_mas_cmd_eol(&p);
+                launch_elevated_cmd(&p.to_string_lossy(), "/KMS38");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã khởi chạy kích hoạt Windows Server / Enterprise KMS38 qua MAS!"
+                }))
+            } else {
+                run_mas_online("/KMS38");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "output": "Đã nạp MAS chính thức và kích hoạt KMS38!"
+                }))
+            }
         }
         "clean" => {
             deep_clean_activation("windows")
@@ -1125,6 +1287,38 @@ pub fn run_mas_action(mode: &str) -> Result<serde_json::Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_search_mas_aio_in_root_finds_expected_layout() {
+        let dir = std::env::temp_dir().join(format!("mas_dfs_{}", std::process::id()));
+        let nested = dir.join("MAS_Temp").join("Microsoft-Activation-Scripts-master").join("MAS").join("All-In-One-Version-KL");
+        std::fs::create_dir_all(&nested).unwrap();
+        let target = nested.join("MAS_AIO.cmd");
+        std::fs::write(&target, "x".repeat(MAS_CMD_MIN_SIZE as usize + 1)).unwrap();
+        std::fs::write(dir.join("MAS_AIO.cmd"), "x".repeat(100)).unwrap();
+        let found = search_mas_aio_in_root(&dir, 6).expect("must locate the nested real MAS_AIO.cmd");
+        assert_eq!(found, target, "must skip undersized file and find the real one");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_mas_cmd_eligible_size_threshold() {
+        let dir = std::env::temp_dir().join(format!("mas_eligible_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("MAS_AIO.cmd");
+        std::fs::write(&big, "x".repeat(MAS_CMD_MIN_SIZE as usize + 1)).unwrap();
+        let small = dir.join("small.cmd");
+        std::fs::write(&small, "x".repeat(MAS_CMD_MIN_SIZE as usize - 1)).unwrap();
+        assert!(mas_cmd_eligible(&big), "file larger than 10KB must be eligible");
+        assert!(!mas_cmd_eligible(&small), "file smaller than 10KB must be rejected");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_run_mas_action_unknown_mode_is_error() {
+        let res = run_mas_action("not_a_real_mode");
+        assert!(res.is_err(), "unknown mode must produce an error");
+    }
 
     #[test]
     fn test_scan_office_activation_json() {

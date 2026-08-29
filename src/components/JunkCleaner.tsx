@@ -101,6 +101,36 @@ const initialJunkCategories: JunkCategory[] = [
 let __junkScanCache: { data: any; timestamp: number } | null = null;
 const SCAN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+const idToName: Record<string, string> = {
+  'user_temp': 'Temporary Files (User)',
+  'system_temp': 'Windows Temp',
+  'prefetch': 'Prefetch',
+  'win_update': 'Windows Update Cache',
+  'system_logs': 'Windows Log Files',
+  'recycle_bin': 'Recycle Bin',
+  'registry': 'Registry & History',
+  'bsod_dumps': 'File Dump Màn Hình Xanh',
+  'chrome_cache': 'Cache Trình Duyệt Google Chrome',
+  'edge_cache': 'Cache Trình Duyệt MS Edge',
+  'coccoc_cache': 'Cache Trình Duyệt Cốc Cốc',
+};
+
+function formatBlockedReasons(reasons: any): string {
+  if (!reasons) return '';
+  const label: Record<string, string> = {
+    in_use: 'đang được sử dụng',
+    access_denied: 'thiếu quyền truy cập',
+    reparse_point: 'reparse/mount hệ thống (tự bảo vệ)',
+    other: 'lỗi khác',
+  };
+  const parts: string[] = [];
+  for (const key of ['in_use', 'access_denied', 'reparse_point', 'other']) {
+    const bytes = reasons[key];
+    if (bytes) parts.push(`${label[key]}: ${(bytes / 1048576).toFixed(1)} MB`);
+  }
+  return parts.join('; ');
+}
+
 export default function JunkCleaner() {
   const [categories, setCategories] = useState<JunkCategory[]>(initialJunkCategories);
   const [scanning, setScanning] = useState(false);
@@ -109,11 +139,38 @@ export default function JunkCleaner() {
   const [cleaned, setCleaned] = useState(false);
   const [totalReclaimed, setTotalReclaimed] = useState(0);
 
-  // Simulated progress state
+  // Real progress — fed by 'junk-scan-progress' / 'junk-clean-progress' events
+  const [scanProgress, setScanProgress] = useState<{ done: number; total: number; name: string } | null>(null);
+  const [cleanProgressInfo, setCleanProgressInfo] = useState<{ done: number; total: number; name: string } | null>(null);
   const [cleanProgress, setCleanProgress] = useState(0);
+  // Honest clean outcome: freed + whatever could NOT be deleted (and why)
+  const [cleanedResult, setCleanedResult] = useState<{ freedMB: number; blockedBytes: number; reasons: string } | null>(null);
 
   React.useEffect(() => {
     handleScan();
+  }, []);
+
+  React.useEffect(() => {
+    const api = (window as any).electronAPI;
+    let unScan: any = null;
+    let unClean: any = null;
+    try {
+      if (api?.onJunkScanProgress) {
+        unScan = api.onJunkScanProgress((p: any) => setScanProgress({ done: p.done, total: p.total, name: p.name }));
+      }
+      if (api?.onJunkCleanProgress) {
+        unClean = api.onJunkCleanProgress((p: any) => {
+          setCleanProgressInfo({ done: p.done, total: p.total, name: p.name });
+          setCleanProgress(p.total > 0 ? Math.min(95, Math.round((p.done / p.total) * 100)) : 0);
+        });
+      }
+    } catch (e) {
+      console.warn('Junk progress listeners failed:', e);
+    }
+    return () => {
+      try { unScan?.(); } catch (e) {}
+      try { unClean?.(); } catch (e) {}
+    };
   }, []);
 
   const handleToggle = (id: string) => {
@@ -146,6 +203,10 @@ export default function JunkCleaner() {
     setScanning(true);
     setScanned(false);
     setCleaned(false);
+    setScanProgress(null);
+    setCleanProgress(0);
+    setCleanProgressInfo(null);
+    setCleanedResult(null);
 
     try {
       const rawData = await (window as any).electronAPI.scanJunk();
@@ -193,61 +254,52 @@ export default function JunkCleaner() {
   const handleClean = async () => {
     setCleaning(true);
     setCleanProgress(0);
+    setCleanProgressInfo(null);
+    setCleanedResult(null);
     startTask('junk-cleaner', 'Dọn Dẹp Rác Hệ Thống', 'Dọn Rác', 'Đang quét và giải phóng bộ nhớ tạm...', 'cleaner', 'from-emerald-500 to-emerald-600');
-    
-    // Simulate Progress UI for Cleaning
-    let currentP = 0;
-    const pInterval = setInterval(() => {
-      currentP += Math.floor(Math.random() * 15) + 5;
-      if (currentP > 90) currentP = 90;
-      setCleanProgress(currentP);
-      updateTask('junk-cleaner', currentP, `Đang giải phóng bộ nhớ đệm: ${currentP}%`, `[+] Tiến trình dọn rác đạt ${currentP}%`);
-    }, 300);
 
-    const checkedMB = categories.filter(cat => cat.checked).reduce((acc, cat) => acc + cat.sizeMB, 0);
-
-    const finalize = (mb: number) => {
-      clearInterval(pInterval);
+    const finalize = (freedMB: number, blockedBytes: number, reasons: string, result: any) => {
       setCleanProgress(100);
-      setTotalReclaimed(mb);
+      setTotalReclaimed(freedMB);
+      setCleanedResult({ freedMB, blockedBytes, reasons });
       __junkScanCache = null; // Invalidate cache after clean
-      completeTask('junk-cleaner', `Đã dọn dẹp thành công ${mb} MB rác hệ thống!`);
+      const blockedNote = blockedBytes > 0 ? ` — còn ${(blockedBytes / 1048576).toFixed(1)} MB không xóa được` : '';
+      completeTask('junk-cleaner', `Đã dọn dẹp thành công ${freedMB.toFixed(1)} MB rác hệ thống${blockedNote}!`);
       playTaskDoneSound();
       const current = getSessionReport();
 
       const prevMB = current.junkCleanedMB || 0;
       const catNames = categories.filter(c => c.checked).map(c => c.name);
       updateSessionReport({
-        junkCleanedMB: prevMB + mb,
+        junkCleanedMB: prevMB + freedMB,
         junkCleanedCategories: Array.from(new Set([...(current.junkCleanedCategories || []), ...catNames]))
       });
       setTimeout(() => {
         setCleaning(false);
         setCleaned(true);
-        setCategories(prev => prev.map(cat => (cat.checked ? { ...cat, sizeMB: 0, checked: false } : cat)));
+        // Keep honest remaining sizes: only fully-cleaned categories drop to 0.
+        setCategories(prev => prev.map(cat => {
+          if (!cat.checked) return cat;
+          const detail = result && Array.isArray(result.details)
+            ? result.details.find((d: any) => (idToName[cat.id] === d.category) || (cat.name === d.category) || (cat.id === d.category))
+            : null;
+          const freedThis = detail && typeof detail.freed_bytes === 'number' ? detail.freed_bytes / (1024 * 1024) : 0;
+          const remaining = Math.max(0, cat.sizeMB - freedThis);
+          return { ...cat, sizeMB: Math.round(remaining * 10) / 10, checked: remaining > 0.05 };
+        }));
       }, 800);
     };
 
     try {
-      const idToName: Record<string, string> = {
-        'user_temp': 'Temporary Files (User)',
-        'system_temp': 'Windows Temp',
-        'prefetch': 'Prefetch',
-        'win_update': 'Windows Update Cache',
-        'system_logs': 'Windows Log Files',
-        'recycle_bin': 'Recycle Bin',
-        'registry': 'Registry & History',
-        'bsod_dumps': 'File Dump Màn Hình Xanh',
-        'chrome_cache': 'Cache Trình Duyệt Google Chrome',
-        'edge_cache': 'Cache Trình Duyệt MS Edge',
-        'coccoc_cache': 'Cache Trình Duyệt Cốc Cốc',
-      };
       const activeCategories = categories.filter(cat => cat.checked).map(cat => idToName[cat.id] || cat.id);
       const result = await (window as any).electronAPI.cleanJunk(activeCategories);
-      const freedMB = result?.total_freed ? parseFloat(result.total_freed) || checkedMB : checkedMB;
-      finalize(freedMB);
+      const freedBytes = typeof result?.total_freed_bytes === 'number'
+        ? result.total_freed_bytes
+        : (parseFloat(result?.total_freed || '0') || 0) * 1048576;
+      const blockedBytes = typeof result?.total_blocked_bytes === 'number' ? result.total_blocked_bytes : 0;
+      const reasons = formatBlockedReasons(result?.blocked_reasons);
+      finalize(freedBytes / 1048576, blockedBytes, reasons, result);
     } catch (err: any) {
-      clearInterval(pInterval);
       setCleaning(false);
       failTask('junk-cleaner', "Lỗi dọn rác: " + err.message);
       alert("Lỗi dọn rác: " + err.message);
@@ -300,16 +352,26 @@ export default function JunkCleaner() {
           {(scanning || cleaning) && (
             <div className="pt-2 border-t border-slate-800 space-y-1.5 animate-fade-in">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-200">
-                <span className="flex items-center gap-2">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
-                  {scanning ? "Đang phân tích bộ nhớ đệm..." : `Đang dọn dẹp rác hệ thống (${cleanProgress}%)...`}
+                <span className="flex items-center gap-2 truncate min-w-0">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400 shrink-0" />
+                  {scanning
+                    ? (scanProgress
+                        ? `Đang phân tích: ${scanProgress.name} (${scanProgress.done}/${scanProgress.total})…`
+                        : 'Đang phân tích bộ nhớ đệm…')
+                    : (cleanProgressInfo
+                        ? `Đang dọn dẹp: ${cleanProgressInfo.name} (${cleanProgressInfo.done}/${cleanProgressInfo.total})…`
+                        : 'Đang dọn dẹp rác hệ thống…')}
                 </span>
-                <span className="font-mono text-amber-400 font-bold">{scanning ? "65%" : `${cleanProgress}%`}</span>
+                <span className="font-mono text-amber-400 font-bold shrink-0">
+                  {scanning
+                    ? (scanProgress ? `${Math.round((scanProgress.done / scanProgress.total) * 100)}%` : '…')
+                    : `${cleanProgress}%`}
+                </span>
               </div>
               <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800 p-0.5">
-                <div 
-                  className={`h-full rounded-full transition-all duration-300 ${scanning ? 'bg-gradient-to-r from-amber-500 to-rose-500 w-[65%]' : 'bg-gradient-to-r from-rose-500 to-emerald-400'}`}
-                  style={cleaning ? { width: `${cleanProgress}%` } : undefined}
+                <div
+                  className={`h-full rounded-full transition-all duration-300 bg-gradient-to-r from-rose-500 to-emerald-400 ${scanning && !scanProgress ? 'animate-pulse' : ''}`}
+                  style={{ width: `${scanning ? (scanProgress ? Math.round((scanProgress.done / scanProgress.total) * 100) : 8) : cleanProgress}%` }}
                 />
               </div>
             </div>
@@ -398,9 +460,19 @@ export default function JunkCleaner() {
         
         <div className="w-full md:w-[320px]">
           {cleaned ? (
-            <div className="flex items-center justify-center gap-2 p-3 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/30 shadow-xs">
-              <CheckCircle className="w-5 h-5" />
-              <span className="text-xs font-bold">Đã dọn {(totalReclaimed / 1024).toFixed(2)} GB!</span>
+            <div className="w-full space-y-2">
+              <div className={`flex items-center justify-center gap-2 p-3 rounded-xl border shadow-xs ${cleanedResult?.blockedBytes ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-xs font-bold">
+                  Đã dọn {(totalReclaimed / 1024).toFixed(2)} GB
+                  {cleanedResult?.blockedBytes ? ` — còn ${(cleanedResult.blockedBytes / (1024 * 1024 * 1024)).toFixed(2)} GB không thể xóa` : '!'}
+                </span>
+              </div>
+              {cleanedResult?.blockedBytes ? (
+                <div className="p-2.5 rounded-lg bg-red-500/5 border border-red-500/20 text-[11px] text-red-300/90 leading-relaxed">
+                  <b>Không thể xóa:</b> {cleanedResult.reasons || 'một số tệp đang được sử dụng hoặc bị khóa quyền. Hãy đóng các ứng dụng đang chạy và thử lại.'}
+                </div>
+              ) : null}
             </div>
           ) : (
             <button

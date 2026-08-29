@@ -465,17 +465,35 @@ async fn run_mas_action(mode: String) -> Result<serde_json::Value, String> {
 // ── Junk Cleaner ──────────────────────────────
 
 #[tauri::command]
-async fn scan_junk() -> Result<temp::TempScanResult, String> {
-    tokio::task::spawn_blocking(temp::scan_junk)
-        .await
-        .map_err(|e| e.to_string())?
+async fn scan_junk(app: tauri::AppHandle) -> Result<temp::TempScanResult, String> {
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let emit = |done: u32, total: u32, name: &str| {
+            let _ = handle.emit(
+                "junk-scan-progress",
+                &serde_json::json!({ "done": done, "total": total, "name": name }),
+            );
+        };
+        temp::scan_junk_with_progress(&emit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn clean_junk(categories: Vec<String>) -> Result<serde_json::Value, String> {
-    tokio::task::spawn_blocking(move || temp::clean_junk(&categories))
-        .await
-        .map_err(|e| e.to_string())?
+async fn clean_junk(app: tauri::AppHandle, categories: Vec<String>) -> Result<serde_json::Value, String> {
+    let handle = app.clone();
+    tokio::task::spawn_blocking(move || {
+        let emit = |done: u32, total: u32, name: &str| {
+            let _ = handle.emit(
+                "junk-clean-progress",
+                &serde_json::json!({ "done": done, "total": total, "name": name }),
+            );
+        };
+        temp::clean_junk_with_progress(&categories, &emit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ── Network ───────────────────────────────────
@@ -524,8 +542,13 @@ async fn restore_advanced_optimization() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn read_windows_settings() -> Result<serde_json::Value, String> {
-    tokio::task::spawn_blocking(windows_settings::read_windows_settings)
+async fn read_windows_settings(opts: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    let force_refresh = match opts {
+        Some(v) => v == serde_json::Value::Bool(true)
+            || v.get("forceRefresh").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        None => false,
+    };
+    tokio::task::spawn_blocking(move || windows_settings::read_windows_settings(force_refresh))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -539,22 +562,16 @@ async fn run_windows_fixer() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn reset_windows_update() -> Result<serde_json::Value, String> {
-    tokio::task::spawn_blocking(|| {
-        windows_settings::reset_windows_update()?;
-        Ok(serde_json::json!({ "success": true }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(windows_settings::reset_windows_update)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn rebuild_icon_cache() -> Result<serde_json::Value, String> {
-    tokio::task::spawn_blocking(|| {
-        windows_settings::rebuild_icon_cache()?;
-        Ok(serde_json::json!({ "success": true }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(windows_settings::rebuild_icon_cache)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -586,7 +603,7 @@ async fn apply_windows_settings(state: serde_json::Value) -> Result<serde_json::
 #[tauri::command]
 async fn apply_taskbar_settings(state: serde_json::Value) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
-        windows_settings::apply_windows_settings(state)?;
+        windows_settings::apply_taskbar_settings(state)?;
         Ok(serde_json::json!({ "success": true }))
     })
     .await

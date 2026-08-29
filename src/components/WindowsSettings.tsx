@@ -209,10 +209,10 @@ export default function WindowsSettings() {
   }, []);
 
 
-  const loadSettings = async () => {
+  const loadSettings = async (forceRefresh?: boolean) => {
     setLoadingState(true);
     try {
-      const res = await (window as any).electronAPI.readWindowsSettings();
+      const res = await (window as any).electronAPI.readWindowsSettings(forceRefresh ? true : undefined);
       if (res.success && res.data) {
         setState(prev => ({ ...prev, ...res.data }));
         
@@ -367,7 +367,7 @@ export default function WindowsSettings() {
           </p>
         </div>
         <button 
-          onClick={loadSettings}
+          onClick={() => loadSettings(true)}
           disabled={loadingState}
           className="flex items-center gap-2 px-4 py-2 bg-[#18233c] hover:bg-[#202f50] text-slate-200 hover:text-white border border-slate-700 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer"
         >
