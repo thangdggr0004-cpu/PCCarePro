@@ -4,18 +4,83 @@ fn run_ps(script: &str) -> String {
     exec::run_ps(script)
 }
 
-fn run_cmd(cmd: &str) -> String {
-    String::from_utf8_lossy(&exec::run_cmd(&[cmd]).stdout).to_string()
+/// Loose IPv4 validation (frontend only enforces non-empty). Returns true if the
+/// string looks like a dotted-quad IPv4; used to keep user input safe before it is
+/// interpolated into an elevated PowerShell command.
+fn is_valid_ipv4(v: &str) -> bool {
+    let octets: Vec<&str> = v.split('.').collect();
+    if octets.len() != 4 {
+        return false;
+    }
+    octets.iter().all(|o| {
+        !o.is_empty()
+            && o.len() <= 3
+            && o.chars().all(|c| c.is_ascii_digit())
+            && o.parse::<u32>().map_or(false, |n| n <= 255)
+    })
 }
 
-/// Reset network stack (Winsock, TCP/IP, DNS, IP Release & Renew)
+/// Reset network stack (Winsock, TCP/IP, DNS, IP Release & Renew).
+/// Runs as ONE elevated PowerShell (mirrors Electron `runPowerShellScriptElevated`).
+/// Captures the REAL exit code of each core command (winsock reset / int ip reset /
+/// flushdns) and only reports success when every core step succeeds — no longer
+/// swallowing errors with `let _ =`. Release/Renew stay as best-effort extras (not in
+/// Electron; DHCP-less setups can legitimately fail them without failing the reset).
 pub fn reset_network_stack() -> Result<serde_json::Value, String> {
-    let _ = run_cmd("netsh winsock reset");
-    let _ = run_cmd("netsh int ip reset");
-    let _ = run_cmd("ipconfig /flushdns");
-    let _ = run_cmd("ipconfig /release");
-    let _ = run_cmd("ipconfig /renew");
+    let ps = r#"
+$ErrorActionPreference = 'Continue'
+$results = @()
+
+netsh winsock reset *> $null
+$results += [pscustomobject]@{ step='winsock_reset'; ok=($LASTEXITCODE -eq 0); code=$LASTEXITCODE }
+
+# netsh int ip reset returns exit code 1 EVEN on a successful (staged) reset, because it
+# always ends with "Restart the computer to complete this action." and emits a known
+# harmless "Access is denied" quirk for one internal component. So we treat it as OK
+# when it reached the reboot-pending state, and as a real failure otherwise.
+$ipOut = netsh int ip reset 2>&1 | Out-String
+$ipOk = (($LASTEXITCODE -eq 0) -or ($ipOut -match 'Restart the computer to complete this action'))
+$results += [pscustomobject]@{ step='int_ip_reset'; ok=$ipOk; code=$LASTEXITCODE }
+
+ipconfig /flushdns *> $null
+$results += [pscustomobject]@{ step='flush_dns'; ok=($LASTEXITCODE -eq 0); code=$LASTEXITCODE }
+
+# Best-effort extras: release/renew can legitimately fail on non-DHCP interfaces
+ipconfig /release *> $null
+ipconfig /renew *> $null
+
+$failed = @($results | Where-Object { -not $_.ok })
+[pscustomobject]@{ success=($failed.Count -eq 0); steps=$results } | ConvertTo-Json -Depth 5
+"#;
+    let out = exec::run_ps_elevated(ps).unwrap_or_else(|e| {
+        format!(r#"{{ "success": false, "error": "{}", "elevation_error": true }}"#, json_escape(&e))
+    });
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|_| {
+        serde_json::json!({ "success": false, "error": "Không thể đọc kết quả reset mạng.", "raw": out })
+    });
+    let ok = parsed["success"].as_bool().unwrap_or(false);
+    if !ok {
+        let failed_steps: Vec<String> = parsed["steps"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|s| s["ok"].as_bool().unwrap_or(false) == false)
+                    .map(|s| format!("{} (code {})", s["step"].as_str().unwrap_or("?"), s["code"].as_i64().unwrap_or(-1)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let detail = if failed_steps.is_empty() {
+            parsed["error"].as_str().unwrap_or("Lỗi không xác định khi reset chuỗi mạng.").to_string()
+        } else {
+            format!("Reset thất bại: {}", failed_steps.join(", "))
+        };
+        return Ok(serde_json::json!({ "success": false, "error": detail }));
+    }
     Ok(serde_json::json!({ "success": true, "message": "Đã thiết lập lại (reset) toàn bộ Network Stack & DNS. Khuyến nghị khởi động lại máy." }))
+}
+
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Run network diagnostics matching frontend NetworkDiagnosisResult format
@@ -88,19 +153,83 @@ pub fn diagnose_network() -> Result<serde_json::Value, String> {
     Ok(parsed)
 }
 
-/// Apply DNS settings to all active Up network adapters
+/// Apply DNS settings to all active Up network adapters.
+/// Runs as ONE elevated PowerShell (mirrors Electron `runPowerShellScriptElevated`).
+/// Keeps the (intentional) improvement over Electron of applying DNS to EVERY Up
+/// adapter instead of only the first one, but now captures the REAL per-adapter
+/// outcome and reports an honest failure if any adapter's DNS set/add fails — no
+/// more silent `let _ =` swallowing.
 pub fn apply_dns(primary: &str, secondary: &str) -> Result<serde_json::Value, String> {
-    let adapters = run_ps("Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -ExpandProperty Name");
-    for adapter in adapters.lines() {
-        let adapter = adapter.trim();
-        if adapter.is_empty() {
-            continue;
-        }
-        let _ = exec::run_cmd_quiet("netsh", &["interface", "ipv4", "set", "dns", &format!("name={}", adapter), "static", primary]);
-        let _ = exec::run_cmd_quiet("netsh", &["interface", "ipv4", "add", "dns", &format!("name={}", adapter), secondary, "index=2"]);
+    if !is_valid_ipv4(primary) || !is_valid_ipv4(secondary) {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "Địa chỉ DNS phải là IPv4 hợp lệ (vd 8.8.8.8)."
+        }));
     }
-    let _ = exec::run_cmd_quiet("ipconfig", &["/flushdns"]);
-    Ok(serde_json::json!({ "success": true, "message": "Đã đổi DNS và làm mới cache DNS thành công!" }))
+    let ps = format!(
+        r#"
+$adapters = @(Get-NetAdapter | Where-Object {{ $_.Status -eq 'Up' }})
+if ($adapters.Count -eq 0) {{
+  [pscustomobject]@{{ success=$false; error='Không tìm thấy adapter mạng đang bật (Up).'; applied=@(); failures=@() }} | ConvertTo-Json -Depth 5
+  exit
+}}
+$applied = @()
+$failures = @()
+foreach ($a in $adapters) {{
+  $name = $a.Name
+  netsh interface ipv4 set dns name="$name" static {primary} *> $null
+  if ($LASTEXITCODE -ne 0) {{
+    $failures += [pscustomobject]@{{ adapter=$name; error="Đặt DNS chính thất bại (code $LASTEXITCODE)" }}
+    continue
+  }}
+  netsh interface ipv4 add dns name="$name" {secondary} index=2 *> $null
+  if ($LASTEXITCODE -ne 0) {{
+    $failures += [pscustomobject]@{{ adapter=$name; error="Thêm DNS phụ thất bại (code $LASTEXITCODE)" }}
+  }} else {{
+    $applied += $name
+  }}
+}}
+ipconfig /flushdns *> $null
+[pscustomobject]@{{ success=($failures.Count -eq 0); applied=$applied; failures=$failures }} | ConvertTo-Json -Depth 5
+"#);
+    let out = exec::run_ps_elevated(&ps).unwrap_or_else(|e| {
+        format!(r#"{{ "success": false, "error": "{}" }}"#, json_escape(&e))
+    });
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap_or_else(|_| {
+        serde_json::json!({ "success": false, "error": "Không thể đọc kết quả đổi DNS.", "raw": out })
+    });
+    let ok = parsed["success"].as_bool().unwrap_or(false);
+    if !ok {
+        let detail = parsed["error"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                let failures: Vec<String> = parsed["failures"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|f| format!("{}: {}", f["adapter"].as_str().unwrap_or("?"), f["error"].as_str().unwrap_or("?")))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if failures.is_empty() {
+                    "Lỗi không xác định khi đổi DNS.".to_string()
+                } else {
+                    format!("Đổi DNS thất bại: {}", failures.join(" | "))
+                }
+            });
+        return Ok(serde_json::json!({ "success": false, "error": detail }));
+    }
+    let applied: Vec<String> = parsed["applied"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    let message = if applied.is_empty() {
+        "Đã đổi DNS và làm mới cache DNS thành công!".to_string()
+    } else {
+        format!("Đã đổi DNS và làm mới cache DNS thành công! Adapter: {}", applied.join(", "))
+    };
+    Ok(serde_json::json!({ "success": true, "message": message }))
 }
 
 /// List all saved WiFi profiles with decrypted passwords and auth type

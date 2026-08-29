@@ -1,5 +1,8 @@
 use std::os::windows::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ELEV_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 pub const DETACHED_PROCESS: u32 = 0x00000008;
@@ -73,12 +76,16 @@ pub fn run_ps_raw(script: &str) -> Output {
 
 fn write_elevated_script(script: &str, wrap_output: bool) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>), String> {
     let id = format!(
-        "{}_{}",
+        "{}_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis()
+            .as_millis(),
+        // Monotonic per-call counter: two concurrent run_ps_elevated calls from the same
+        // process can land in the SAME millisecond, which would otherwise collide on the
+        // identical temp filename and clobber each other's script + output files.
+        ELEV_TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
     );
     let ps_path = std::env::temp_dir().join(format!("tp_el_{}.ps1", id));
     let out_path = std::env::temp_dir().join(format!("tp_el_{}.out.txt", id));
@@ -287,6 +294,35 @@ mod tests {
     fn test_run_ps_elevated_returns_output() {
         let out = run_ps_elevated("Write-Output 'elevated-ok'");
         assert!(out.as_deref().unwrap_or_default().contains("elevated-ok"));
+    }
+
+    #[test]
+    fn concurrent_elevated_scripts_do_not_collide_on_temp_files() {
+        use std::sync::{Arc, Barrier};
+
+        // Deterministic: with the atomic per-call counter in write_elevated_script, two
+        // run_ps_elevated calls fired together MUST yield distinct, correctly-scoped
+        // output. Before the fix, identical temp filenames (same PID + same ms) made one
+        // call read the other's (or empty) output.
+        let barrier = Arc::new(Barrier::new(3));
+        let b2 = barrier.clone();
+        let b3 = barrier.clone();
+
+        let h1 = std::thread::spawn(move || {
+            b2.wait();
+            let out = run_ps_elevated("Write-Output 'MARKER-ALPHA'").unwrap_or_default();
+            out.contains("MARKER-ALPHA")
+        });
+        let h2 = std::thread::spawn(move || {
+            b3.wait();
+            let out = run_ps_elevated("Write-Output 'MARKER-BRAVO'").unwrap_or_default();
+            out.contains("MARKER-BRAVO")
+        });
+
+        barrier.wait();
+        let (r1, r2) = (h1.join().unwrap(), h2.join().unwrap());
+        assert!(r1, "call A did not get its own output");
+        assert!(r2, "call B did not get its own output");
     }
 }
 
