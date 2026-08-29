@@ -140,7 +140,24 @@ pub fn diagnose_network() -> Result<serde_json::Value, String> {
         publicIp = $publicIp
     } | ConvertTo-Json
     "#;
+    let ip_timeout = std::time::Duration::from_secs(3);
+    let (ip_tx, ip_rx) = std::sync::mpsc::channel();
+    // Fetch the public IP in a parallel thread with a hard 3s timeout so a slow/hung
+    // ipify request never blocks the ping/DNS/gateway measurements (which run below
+    // while this thread is in flight). Worst case we only wait up to 3s for it.
+    let ip_thread = std::thread::spawn(move || {
+        let _ = ip_tx.send(fetch_public_ip("https://api.ipify.org", ip_timeout));
+    });
+
     let stdout = run_ps(ps);
+
+    let public_ip = ip_rx
+        .recv_timeout(ip_timeout)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "N/A".to_string());
+    let _ = ip_thread.join();
+
     let mut parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({
         "latency": 25,
         "packetLoss": 0,
@@ -150,7 +167,33 @@ pub fn diagnose_network() -> Result<serde_json::Value, String> {
         "publicIp": "N/A"
     }));
     parsed["success"] = serde_json::json!(true);
+    parsed["publicIp"] = serde_json::json!(public_ip);
     Ok(parsed)
+}
+
+/// Get the public IPv4 via `url` with a bounded timeout. Returns None on any failure
+/// (no network, timeout, non-2xx, empty body) so the caller can fall back to "N/A".
+/// The URL is a parameter purely for testability; production always uses ipify.
+fn fetch_public_ip(url: &str, timeout: std::time::Duration) -> Option<String> {
+    // Install the ring crypto provider idempotently; required because reqwest uses
+    // rustls-no-provider and no provider is installed by default in test/lib contexts.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("PCCareMasterPro")
+        .timeout(timeout)
+        .connect_timeout(timeout)
+        .build()
+        .ok()?;
+    client
+        .get(url)
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Apply DNS settings to all active Up network adapters.
@@ -309,4 +352,47 @@ pub fn restore_wifi() -> Result<serde_json::Value, String> {
     let stdout = run_ps(&ps);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({ "success": true, "count": 1 }));
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod net_ip_tests {
+    use super::*;
+
+    fn is_likely_ipv4(s: &str) -> bool {
+        let octs: Vec<&str> = s.split('.').collect();
+        octs.len() == 4 && octs.iter().all(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_digit()))
+    }
+
+    #[test]
+    fn diagnose_network_with_internet_returns_real_public_ip() {
+        let res = diagnose_network().unwrap();
+        let ip = res["publicIp"].as_str().unwrap_or("");
+        eprintln!("diagnose -> {:?}", res);
+        assert!(is_likely_ipv4(ip), "expected a real public IPv4, got '{}'", ip);
+        // cross-check against a manual lookup
+        let manual = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .get("https://api.ipify.org")
+            .send()
+            .unwrap()
+            .text()
+            .unwrap()
+            .trim()
+            .to_string();
+        eprintln!("manual ipify lookup: {}", manual);
+        assert_eq!(ip, manual, "diagnose publicIp should match a live ipify query");
+    }
+
+    #[test]
+    fn fetch_public_ip_unreachable_times_out_to_none() {
+        // Blackhole non-routable address: forces the 3s timeout -> None (no hang/panic).
+        let start = std::time::Instant::now();
+        let r = fetch_public_ip("http://10.255.255.1:9/", std::time::Duration::from_secs(3));
+        let elapsed = start.elapsed();
+        eprintln!("unreachable fetch -> {:?} after {:.2}s", r, elapsed.as_secs_f64());
+        assert!(r.is_none(), "unreachable host must yield None, got {:?}", r);
+        assert!(elapsed.as_secs() <= 6, "should not hang; took {:.1}s", elapsed.as_secs_f64());
+    }
 }
