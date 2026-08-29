@@ -430,21 +430,27 @@ function Get-SfcStatus($text) {
     return 'Unknown'
 }
 
+# sfc /scannow writes wide-char console output; when piped through Out-String it can
+# come back interleaved with NUL bytes (UTF-16LE read as ASCII). Strip NULs + normalize
+# before parsing so the real conclusion phrase is matchable on all Windows versions.
+function Sanitize($text) {
+    return (($text -replace [char]0, '' ) -replace '\s+', ' ').Trim()
+}
+
 $results = @()
 
 # Run SFC
-$sfcRaw = (& sfc /scannow 2>&1 | Out-String)
+$sfcRaw = Sanitize ((& sfc /scannow 2>&1 | Out-String))
 $sfcCode = Get-SfcStatus $sfcRaw
 $results += "SFC /SCANNOW: $sfcCode"
 
 # Run DISM
-$dismRaw = (& DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String)
-$dismClean = ($dismRaw -replace '\s+', ' ').Trim()
-if ($dismClean -match 'no component store corruption was detected') {
+$dismRaw = Sanitize ((& DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String))
+if ($dismRaw -match 'no component store corruption was detected') {
     $dismStatus = 'Clean'
-} elseif ($dismClean -match 'the component store corruption was repaired') {
+} elseif ($dismRaw -match 'the component store corruption was repaired') {
     $dismStatus = 'Repaired'
-} elseif ($dismClean -match 'restore operation completed successfully') {
+} elseif ($dismRaw -match 'restore operation completed successfully') {
     $dismStatus = 'Clean'
 } else {
     $dismStatus = 'Unknown'
