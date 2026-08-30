@@ -3,3 +3,8 @@ dist/
 src-tauri/target/
 src-tauri/updater.key
 src-tauri/updater.key.pass
+# Signing keys
+src-tauri/mykey.key
+src-tauri/mykey.key.pub
+src-tauri/mykey_nopw.key
+src-tauri/mykey_nopw.key.pub

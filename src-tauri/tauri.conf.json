@@ -29,7 +29,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJENzM5NENFOUM2MUM2ODEKUldTQnhtR2N6cFJ6dlhFNG8wZmVTSUtlUExreFpRZ1lEN09uRFU0U2lmUFFneFYrSHRTd0FjaDUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENBOUE4RDc3RjU1OUVEMEIKUldRTDdWbjFkNDJheWc0WVdSUVlUNjZoU3hqKzFJTjF5T3N3MlFEUHRKdExubVl3SXNwN2k0eVEK",
       "endpoints": [
         "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.2/latest.json"
       ]
