@@ -1,45 +1,86 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Info, X, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Download, X, RefreshCw } from 'lucide-react';
 
 export default function AutoUpdater() {
-  const [updateInfo, setUpdateInfo] = useState<any>(null);
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; notes: string } | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [downloaded, setDownloaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Listen to events from autoUpdater
-    const offUpdater = (window as any).electronAPI?.onUpdaterEvent?.((eventData: any) => {
-      if (eventData.type === 'update-available') {
+  const checkForUpdate = useCallback(async () => {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update) {
         setUpdateInfo({
-          currentVersion: eventData.info.currentVersion || '?',
-          latestVersion: eventData.info.latestVersion || 'Mới',
-          releaseNotes: eventData.info.releaseNotes
+          version: update.version || '?',
+          notes: update.body || '',
         });
-      } else if (eventData.type === 'download-progress') {
-        setDownloading(true);
-        setProgress(Math.round(eventData.progress.percent));
-      } else if (eventData.type === 'update-downloaded') {
+      }
+    } catch {
+      // silently ignore — updater not configured or no update
+    }
+  }, []);
+
+  const downloadAndInstall = useCallback(async () => {
+    try {
+      setDownloading(true);
+      setProgress(0);
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update) {
+        await update.downloadAndInstall((downloadProgress) => {
+          if ('dataLength' in downloadProgress && 'chunkLength' in downloadProgress) {
+            const pct = Math.round((downloadProgress.dataLength / (downloadProgress.chunkLength || 1)) * 100);
+            setProgress(Math.min(pct, 100));
+          }
+        });
         setDownloading(false);
         setDownloaded(true);
         setProgress(100);
       }
-    });
-
-    // Trigger check
-    const timer = setTimeout(() => {
-      (window as any).electronAPI?.checkForUpdates?.();
-    }, 3000);
-
-    return () => {
-      offUpdater?.();
-      clearTimeout(timer);
-    };
+    } catch (e: any) {
+      setDownloading(false);
+      setError(e?.message || 'Lỗi khi tải bản cập nhật');
+    }
   }, []);
 
+  const relaunchApp = useCallback(async () => {
+    try {
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      await relaunch();
+    } catch {
+      window.location.reload();
+    }
+  }, []);
 
-  if (!updateInfo || dismissed) return null;
+  useEffect(() => {
+    const timer = setTimeout(checkForUpdate, 5000);
+    return () => clearTimeout(timer);
+  }, [checkForUpdate]);
+
+  if (dismissed || error) {
+    if (error) {
+      setTimeout(() => setError(null), 10000);
+    }
+    return error ? (
+      <div className="fixed bottom-6 right-6 z-[999] animate-fade-in">
+        <div className="bg-[#131d33] rounded-2xl shadow-2xl border border-red-800 p-4 max-w-xs relative flex gap-3">
+          <div className="absolute top-0 left-0 w-1 h-full bg-red-500"></div>
+          <div className="flex-1">
+            <p className="text-xs text-red-400">{error}</p>
+          </div>
+          <button onClick={() => setError(null)} className="text-slate-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    ) : null;
+  }
+
+  if (!updateInfo) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-[999] animate-fade-in">
@@ -58,13 +99,13 @@ export default function AutoUpdater() {
             </button>
           </h4>
           <p className="text-xs text-slate-400 mt-1 mb-2">
-            Phiên bản <strong className="text-emerald-400 font-mono">v{updateInfo.latestVersion}</strong> đã sẵn sàng!
+            Phiên bản <strong className="text-emerald-400 font-mono">v{updateInfo.version}</strong> đã sẵn sàng!
           </p>
-          
-          {updateInfo.releaseNotes && (
+
+          {updateInfo.notes && (
             <div className="bg-[#0e1626] rounded-xl border border-slate-800 p-2.5 text-[11px] text-slate-300 mb-3 max-h-24 overflow-y-auto whitespace-pre-wrap">
               <span className="font-semibold text-emerald-400 block mb-1">Nội dung cập nhật:</span>
-              {updateInfo.releaseNotes}
+              {updateInfo.notes}
             </div>
           )}
 
@@ -82,27 +123,21 @@ export default function AutoUpdater() {
 
           <div className="flex gap-2">
             {!downloading && !downloaded && (
-              <button 
-                onClick={() => {
-                  setDownloading(true);
-                  setProgress(0);
-                  (window as any).electronAPI.downloadUpdate();
-                }}
+              <button
+                onClick={downloadAndInstall}
                 className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer shadow-lg shadow-emerald-500/20 active:scale-95"
               >
-                Tải xuống ngầm
+                Tải &amp; Cập Nhật
               </button>
             )}
-            
+
             {downloaded && (
               <div className="flex flex-col gap-2 w-full">
                 <p className="text-xs text-emerald-400 font-medium">
-                  ✓ File bản mới đã được lưu ngay cạnh file cũ!
+                  ✓ Cập nhật thành công!
                 </p>
-                <button 
-                  onClick={() => {
-                    (window as any).electronAPI.installUpdate();
-                  }}
+                <button
+                  onClick={relaunchApp}
                   className="flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer shadow-lg shadow-emerald-500/20 active:scale-95"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Tắt App &amp; Mở Bản Mới
@@ -111,7 +146,7 @@ export default function AutoUpdater() {
             )}
 
             {!downloading && !downloaded && (
-              <button 
+              <button
                 onClick={() => setDismissed(true)}
                 className="bg-[#18233c] hover:bg-[#202f50] text-slate-300 border border-slate-700 text-xs font-bold py-1.5 px-3 rounded-xl transition-all cursor-pointer active:scale-95"
               >

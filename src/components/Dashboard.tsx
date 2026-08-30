@@ -1191,11 +1191,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               <button
                 onClick={async () => {
                   try {
-                    const res = await (window as any).electronAPI?.checkForUpdates?.();
-                    if (res && res.hasUpdate === false) {
-                      await (window as any).electronAPI.showInfoDialog({
+                    const { check } = await import('@tauri-apps/plugin-updater');
+                    const update = await check();
+                    if (!update) {
+                      const { message } = await import('@tauri-apps/plugin-dialog');
+                      await message(`Bạn đang ở phiên bản mới nhất (v${packageJson.version}).`, {
                         title: 'Thông Tin Cập Nhật',
-                        message: `Bạn đang ở phiên bản mới nhất (v${packageJson.version}).`,
                       });
                     }
                   } catch {}
