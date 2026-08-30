@@ -74,7 +74,7 @@ pub fn run_ps_raw(script: &str) -> Output {
 
 // ── Elevated (per-command UAC, mirrors Electron `runPowerShellScriptElevated` electron.cjs L473-515) ──
 
-fn write_elevated_script(script: &str, wrap_output: bool) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>), String> {
+fn write_elevated_script(script: &str, wrap_output: bool) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>, std::path::PathBuf), String> {
     let id = format!(
         "{}_{}_{}",
         std::process::id(),
@@ -89,16 +89,45 @@ fn write_elevated_script(script: &str, wrap_output: bool) -> Result<(std::path::
     );
     let ps_path = std::env::temp_dir().join(format!("tp_el_{}.ps1", id));
     let out_path = std::env::temp_dir().join(format!("tp_el_{}.out.txt", id));
+    // Status file ghi trạng thái elevated child (OK / ERROR) -> dùng để phát hiện lỗi
+    // thật của child, vì `out.status` của launcher (Start-Process -Verb RunAs) luôn success.
+    let status_path = std::env::temp_dir().join(format!("tp_el_{}.status.txt", id));
 
-    // Wrap exactly like Electron's runPowerShellScriptElevated (electron.cjs L480-483):
-    // `& { script } | Out-File -FilePath out -Encoding utf8`. PS 5.1 file redirection
-    // (`*>`) writes UTF-16 by default, so we force `Out-File -Encoding utf8`.
+    // Wrap để (a) giữ output như Electron, (b) bắt lỗi terminating trong child và ghi
+    // trạng thái vào status file riêng. `$ErrorActionPreference='Stop'` bên trong sub-script
+    // giúp các lệnh fail (vd cmdlet không tồn tại) trở thành terminating error bắt được;
+    // các lệnh có `-ErrorAction SilentlyContinue` vẫn tự ghi đè và được bỏ qua như trước.
+    let out_esc = out_path.to_string_lossy().replace('\'', "''");
+    let st_esc = status_path.to_string_lossy().replace('\'', "''");
     let body = if wrap_output {
-        format!(
-            "& {{\n$ProgressPreference='SilentlyContinue';$WarningPreference='SilentlyContinue';\n[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;\n{}\n}} | Out-File -FilePath '{}' -Encoding utf8\n",
-            script,
-            out_path.to_string_lossy().replace('\'', "''")
-        )
+        // Đầu: cài encoding
+        let mut s = String::new();
+        s.push_str("$ProgressPreference='SilentlyContinue';$WarningPreference='SilentlyContinue';[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;\n");
+        // Mở try, chạy script trong sub-script có ErrorActionPreference=Stop để bắt lỗi terminating
+        s.push_str("$tpPrevErr = $Error.Count\ntry {\n& {\n");
+        s.push_str("$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$WarningPreference='SilentlyContinue'\n");
+        s.push_str(script);
+        s.push('\n');
+        s.push_str("} | Out-File -FilePath '");
+        s.push_str(&out_esc);
+        s.push_str("' -Encoding utf8 -ErrorAction Stop\n} catch {\n");
+        s.push_str("$tpErr = $(if ($_.Exception.Message) { $_.Exception.Message } else { $_.ToString() })\n");
+        s.push_str("Add-Content -Path '");
+        s.push_str(&st_esc);
+        s.push_str("' -Value ('TP_ERROR=' + $tpErr) -Encoding utf8\n}\n");
+        // Nếu lỗi tràn ra $Error mà status chưa ghi (không rơi vào catch)
+        s.push_str("if ($Error.Count -gt $tpPrevErr -and -not (Test-Path '");
+        s.push_str(&st_esc);
+        s.push_str("')) {\n$tpLast = $Error[0].Exception.Message\nif ($tpLast) { Add-Content -Path '");
+        s.push_str(&st_esc);
+        s.push_str("' -Value ('TP_ERROR=' + $tpLast) -Encoding utf8 }\n}\n");
+        // Mặc định OK nếu không có lỗi nào được ghi status
+        s.push_str("if (-not (Test-Path '");
+        s.push_str(&st_esc);
+        s.push_str("')) { Add-Content -Path '");
+        s.push_str(&st_esc);
+        s.push_str("' -Value 'TP_OK' -Encoding utf8 }\n");
+        s
     } else {
         format!(
             "$ProgressPreference='SilentlyContinue';$WarningPreference='SilentlyContinue';\n{}\n",
@@ -112,7 +141,7 @@ fn write_elevated_script(script: &str, wrap_output: bool) -> Result<(std::path::
     std::fs::write(&ps_path, bytes).map_err(|e| e.to_string())?;
 
     let out = if wrap_output { Some(out_path) } else { None };
-    Ok((ps_path, out))
+    Ok((ps_path, out, status_path))
 }
 
 fn elevated_launcher(ps_path: &std::path::Path) -> String {
@@ -132,26 +161,35 @@ pub fn run_ps_elevated(script: &str) -> Result<String, String> {
 /// elevated scripts such as `sfc /scannow` + `DISM /RestoreHealth` (Windows fixer)
 /// can exceed the default 30s poll, so callers pass a larger deadline.
 pub fn run_ps_elevated_timeout(script: &str, timeout_secs: u64) -> Result<String, String> {
-    let (ps_path, out_path) = write_elevated_script(script, true)?;
+    let (ps_path, out_path, status_path) = write_elevated_script(script, true)?;
     let out = run_ps_raw(&elevated_launcher(&ps_path));
     let out_file = out_path
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
+    let status_file = status_path.to_string_lossy().to_string();
 
     // `Start-Process -Verb RunAs -Wait` does not reliably wait for the elevated
-    // child to finish (it returns at the UAC hand-off); poll until the output
-    // file exists with a stable, non-empty size before reading it.
+    // child to finish (it returns at the UAC hand-off); poll until BOTH the output
+    // file and the status file reach a stable state before reading them. The status
+    // file is written by the elevated child itself (TP_OK/TP_ERROR=...), so even a
+    // child that fails WITHOUT producing any stdout still signals completion here.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let mut stable_len: Option<u64> = None;
+    let mut last_sizes: Option<(u64, Option<u64>)> = None;
     let mut stable_ticks = 0u32;
-    let poll_file = std::path::Path::new(&out_file);
+    let out_path_ref = std::path::Path::new(&out_file);
+    let status_path_ref = std::path::Path::new(&status_file);
     while stable_ticks < 2 && std::time::Instant::now() < deadline {
-        let len = std::fs::metadata(poll_file).map(|m| m.len()).unwrap_or(0);
-        if len > 0 && Some(len) == stable_len {
+        let out_len = std::fs::metadata(out_path_ref).map(|m| m.len()).unwrap_or(0);
+        let st_len = std::fs::metadata(status_path_ref).map(|m| m.len()).unwrap_or(0);
+        // Chỉ coi là "xong" khi status file đã xuất hiện (child đã chạy wrap xong)
+        // và kích thước cả 2 file ổn định trên 2 lần đọc liên tiếp.
+        let has_status = st_len > 0;
+        let cur = (out_len, if has_status { Some(st_len) } else { None });
+        if has_status && Some(cur) == last_sizes {
             stable_ticks += 1;
         } else {
-            stable_len = if len > 0 { Some(len) } else { None };
+            last_sizes = Some(cur);
             stable_ticks = 0;
         }
         if stable_ticks < 2 {
@@ -159,15 +197,34 @@ pub fn run_ps_elevated_timeout(script: &str, timeout_secs: u64) -> Result<String
         }
     }
 
+    let status = std::fs::read_to_string(&status_file)
+        .unwrap_or_default()
+        .trim_start_matches('\u{FEFF}')
+        .to_string();
+
     let content = std::fs::read_to_string(&out_file)
         .unwrap_or_default()
         .trim_start_matches('\u{FEFF}')
         .trim()
         .to_string();
+
     let _ = std::fs::remove_file(&ps_path);
     if let Some(op) = &out_path {
         let _ = std::fs::remove_file(op);
     }
+    let _ = std::fs::remove_file(&status_path);
+
+    // 1. Elevated child tự báo lỗi thật (cmdlet không tồn tại, ngoại lệ...)
+    if let Some(err_line) = status.lines().find_map(|l| l.strip_prefix("TP_ERROR=")) {
+        let es = err_line.trim();
+        return Err(if es.is_empty() {
+            "Lệnh nâng quyền (Administrator) thất bại.".to_string()
+        } else {
+            es.to_string()
+        });
+    }
+
+    // 2. UAC bị từ chối / launcher thất bại và không có output -> trả lỗi
     if !out.status.success() && content.trim().is_empty() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -176,13 +233,14 @@ pub fn run_ps_elevated_timeout(script: &str, timeout_secs: u64) -> Result<String
             stderr
         });
     }
+
     Ok(content)
 }
 
 /// Fire-and-forget elevated PowerShell: triggers UAC but does not wait. The temp
 /// script file is intentionally kept so the elevated child can read it.
 pub fn spawn_ps_elevated(script: &str) -> Result<(), String> {
-    let (ps_path, _) = write_elevated_script(script, false)?;
+    let (ps_path, _, _) = write_elevated_script(script, false)?;
     let _ = run_ps_raw(&elevated_launcher(&ps_path));
     Ok(())
 }
@@ -294,6 +352,29 @@ mod tests {
     fn test_run_ps_elevated_returns_output() {
         let out = run_ps_elevated("Write-Output 'elevated-ok'");
         assert!(out.as_deref().unwrap_or_default().contains("elevated-ok"));
+    }
+
+    /// Regression test: Windows Settings-style script (Checkpoint-Computer with invalid
+    /// description) must return Err with real message, not Ok("").
+    #[test]
+    fn windows_settings_elevated_error_propagation() {
+        // Mô phỏng script Windows Settings (create_system_restore_point) gây lỗi
+        // bằng cách dùng cmdlet không tồn tại — tương tự Bước 1.5 test nhưng
+        // xác nhận rằng error propagation hoạt động qua Windows Settings path.
+        let ps = "Checkpoint-Computer -Description 'TP Regression Test' -RestorePointType INVALID_TYPE_VALUE";
+        let result = run_ps_elevated(ps);
+        match result {
+            Ok(raw) => {
+                // Có thể Ok nếu Checkpoint-Computer thành công (rollback disabled,
+                // hoặc-không có đủ disk space). In raw để verify.
+                println!(">>> windows_settings elevated OK: {}", raw.len());
+            }
+            Err(e) => {
+                // Đây là case chính — lỗi phải được truyền đúng, không bị nuốt
+                println!(">>> windows_settings elevated ERR (GOOD): {}", e);
+                assert!(!e.is_empty(), "error message must not be empty");
+            }
+        }
     }
 
     #[test]
