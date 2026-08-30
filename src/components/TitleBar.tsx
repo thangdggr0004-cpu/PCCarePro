@@ -118,7 +118,7 @@ export default function TitleBar() {
           <div className="w-1.5 h-1.5 border border-slate-950 rounded-xs bg-emerald-200" />
         </div>
         <span className="text-[11px] font-semibold text-slate-300 tracking-normal">
-          PCcareMasterPro - Thiên Phát Tech Toolkit
+          PCcareMasterPro
         </span>
       </div>
 
