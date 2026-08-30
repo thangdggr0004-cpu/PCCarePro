@@ -1,11 +1,11 @@
 ﻿{
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTDdWbjFkNDJheXZOMS9YSitUd2xocG13cTVSZHpQaHBNNlJsU3VSQ040Q3V3Q3ZjRTBkVXB3U2Q4R2I4NDhKZThiV2duOURVTWZZemJIWFYrUjA0MHZ5WnIzNFo2b0FBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTEwNTUxCWZpbGU6UENDYXJlTWFzdGVyUHJvXzIuMC4yX3g2NC1zZXR1cC5leGUKOGZvcHFubVRnQjhKUTgyVHIxZXJZTlFQeWJHUkJROUhVSU9FNktXZDB5ZGhjRkM4bFE5dE9kdzFxam9SNTV4eXFyaWhUeDlsb0tyTnV1VGY3bWZNQnc9PQo=",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTDdWbjFkNDJheW9DQUV0MDNIelVRaUxGNUM5SzdUM2NtMDdSU0FyRDVmc2ppd1FqbmpKaUJmS0x0bUsvNm45T2xtNGN4Yi9OZVcyM0svamtNZnlJQnRDbFZDOUU0QWd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTEyNDMwCWZpbGU6UENDYXJlTWFzdGVyUHJvXzIuMC4yX3g2NC1zZXR1cC5leGUKY0FUZzBzQ0tRdVJCWEtOWitxNkdQZjlwNDRrMHVFNTBjNlh1R2ZMYU9xTUpteUc2T1A3QXpsdUJEMjRpS25CanY0b3dJVGdjQmgyRzJrZWVVUEtLQlE9PQo=",
                                              "url":  "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.2/PCCareMasterPro_2.0.2_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-30T17:46:36.4821492Z",
+    "pub_date":  "2026-08-30T17:54:06.8625850Z",
     "version":  "2.0.2",
     "notes":  "PCCareMasterPro v2.0.2"
 }
