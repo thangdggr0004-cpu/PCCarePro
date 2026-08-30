@@ -42,5 +42,6 @@ $manifest = @{
 }
 
 $out = Join-Path $BundleDir "latest.json"
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $out -Encoding utf8
+$json = $manifest | ConvertTo-Json -Depth 5
+[System.IO.File]::WriteAllText($out, $json, [System.Text.UTF8Encoding]::new($false))
 Write-Output "Wrote $out (version=$version)"
