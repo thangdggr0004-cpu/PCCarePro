@@ -1193,13 +1193,23 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
                   try {
                     const { check } = await import('@tauri-apps/plugin-updater');
                     const update = await check();
+                    console.log('[UPDATE] check() result:', JSON.stringify(update));
                     if (!update) {
                       const { message } = await import('@tauri-apps/plugin-dialog');
-                      await message(`Bạn đang ở phiên bản mới nhất (v${packageJson.version}).`, {
+                      await message(`Bạn đang ở phiên bản mới nhất (v${packageJson.version}). Không có bản cập nhật nào mới hơn trên GitHub.`, {
                         title: 'Thông Tin Cập Nhật',
                       });
+                    } else {
+                      const { message } = await import('@tauri-apps/plugin-dialog');
+                      await message(`Có bản mới: v${update.version}\n${update.body || ''}`, {
+                        title: 'Có Bản Cập Nhật',
+                      });
                     }
-                  } catch {}
+                  } catch (e: any) {
+                    console.error('[UPDATE] error:', e);
+                    const { message } = await import('@tauri-apps/plugin-dialog');
+                    await message(`Lỗi kiểm tra cập nhật: ${e?.message || e}`, { title: 'Lỗi' });
+                  }
                 }}
                 className="px-3 py-1 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-400 font-bold rounded-lg text-xs transition cursor-pointer"
               >

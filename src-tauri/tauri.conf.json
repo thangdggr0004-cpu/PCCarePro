@@ -29,7 +29,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENBOUE4RDc3RjU1OUVEMEIKUldRTDdWbjFkNDJheWc0WVdSUVlUNjZoU3hqKzFJTjF5T3N3MlFEUHRKdExubVl3SXNwN2k0eVEK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU3RTZBOTNDRjgyRTBBNjQKUldSa0NpNzRQS25tVjFGUkRHUzNqVWlDMnFGdUpjNnN1WVhTa2orZFpJY1ZsaklhWjFqU3UwRlkK",
       "endpoints": [
         "https://thangdggr0004-cpu.github.io/PCCarePro/latest.json"
       ]
