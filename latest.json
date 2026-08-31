@@ -1,0 +1,11 @@
+{
+  "version": "2.0.3",
+  "notes": "PCCareMasterPro v2.0.3 - License Manager fixes + Office rescan button + Facebook link fix",
+  "pub_date": "2026-08-31T16:08:21.000000Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNHV0dG91OWJLSTYrOG5HYlYvSFdvckpYaWZHTlJFRU5sOWp6bmtHVmNyUlpnS3ZuWjFxYnZ1bHZVNFphYnpKY09JakxzNURwNlpiTzJhcHpYbjF4TXhlUytYaTlzR0FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkyNDYzCWZpbGU6UENDYXJlTWFzdGVyUHJvXzIuMC4zX3g2NC1zZXR1cC5leGUKUXI5ZlkzY2JkNlY3OUNUR0VkNExZcXVSU2M3NDRPYTdCOGxVUkpoWkIvbHpCM0dKWHY2N3R1WHhldm1GUXNubXBHZk5BQlRpYzF2UmVUYWVoYTM1QlE9PQo=",
+      "url": "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.3/PCCareMasterPro_2.0.3_x64-setup.exe"
+    }
+  }
+}
