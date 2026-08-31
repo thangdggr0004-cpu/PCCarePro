@@ -1,11 +1,11 @@
 {
-    "platforms":  {
-                      "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNHV0dG91OWJLSTJSZTBUeW45Uk5DWEVZSnIwN1RkRnU0T3Z6akhQcFphSlZKcWs4ZTQ5b2RtTEc2eEIvNDRLQjBCbHhlZ3lwWmt3amFDdldEVkM1RHIzaGNvT0RFOGdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTkzNzM4CWZpbGU6cGNjYXJlLW1hc3Rlci1wcm8uZXhlCkJkUi8zVURsZFZwazFFSXNOeFVxd043TDdQbnRqcmJQTUk1RE5JZU4wcDhPblFCTUY4MWlNUWtSK0dPK2d0VGNmSGRGc1FsY3p1ZG5sQTlnMXNzZ0RRPT0K",
-                                             "url":  "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.3/pccare-master-pro.exe"
-                                         }
-                  },
-    "pub_date":  "2026-08-31T16:40:04.000000Z",
-    "version":  "2.0.3",
-    "notes":  "PCCareMasterPro v2.0.3"
+  "version": "2.0.3",
+  "notes": "PCCareMasterPro v2.0.3 - License Manager fixes + Office rescan button + Facebook link fix",
+  "pub_date": "2026-08-31T16:43:52.000000Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNHV0dG91OWJLSTFZdis3dVBrK2V4WHp5WXQ4aEhBd2tRQ1dqTUxpK0VPeUdyenZuMjNLN0RsRkU1dkZka0VFUTVuWWs3SUdOM3NaOElLdjJoL2poWnByTDEvbmNLN3dzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTk0NTQxCWZpbGU6cGNjYXJlLW1hc3Rlci1wcm8uZXhlCmZRaExRZ2NYeGtlSnF5ZUZWMGtVZTNpMG9jZlo0dHhHcDNkTE44d3BnNVliaEt5d1N5QVhkZ2pwbEZHWFBSZFNrUFF3YmpPSHVCSnVoMUVSZW5XU0NRPT0K",
+      "url": "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.3/pccare-master-pro.exe"
+    }
+  }
 }
