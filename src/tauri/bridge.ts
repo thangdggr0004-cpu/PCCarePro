@@ -52,6 +52,7 @@ export const tauriBridge = {
   getDiskHealth: () => safeInvokeRaw('get_disk_health'),
   runDxDiag: () => safeInvokeRaw('run_dx_diag'),
   openSystemTool: (tool: string) => safeInvokeRaw('open_system_tool', { tool }),
+  openUrl: (url: string) => safeInvokeRaw('open_url', { url }),
 
 
   // ── Metrics ────────────────────────────────

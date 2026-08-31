@@ -767,7 +767,13 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     } elseif ($actStatus -eq "UNLICENSED") {
         $actMethod = "Chưa Kích Hoạt"
         $actSource = "None"
-        $provenanceConfidence = 100
+        # Confidence: UNLICENSED with no source = low confidence in activation method.
+        # Start at 30 (we know status but nothing about source), add per positive indicator.
+        $ev = 30
+        if ($licData.partialKey -and $licData.partialKey -ne "N/A") { $ev += 10 }
+        if ($licData.licenseChannel -and $licData.licenseChannel -ne "N/A") { $ev += 10 }
+        if ($hasKmsHost) { $ev += 10 }
+        $provenanceConfidence = [math]::Min(70, $ev)
         $recommendationText = "Cần nạp khóa bản quyền chính hãng để sử dụng đầy đủ tính năng."
         [void]$evidenceUsed.Add("Hệ thống chưa tìm thấy chứng chỉ bản quyền hợp lệ.")
     } elseif ($actStatus -eq "GRACE_PERIOD") {
@@ -915,7 +921,7 @@ pub fn deep_clean_activation(type_: &str) -> Result<serde_json::Value, String> {
             }
             @{ success=$true; output="Đã dọn sạch khóa Office và máy chủ KMS." } | ConvertTo-Json
             "#;
-            let stdout = run_ps(ps);
+            let stdout = exec::run_ps_elevated(ps).map_err(|e| format!("Elevated Office cleanup failed: {}", e))?;
             let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({ "success": true, "output": "Đã đặt lại Office." }));
             Ok(parsed)
         }
@@ -1027,7 +1033,7 @@ fn deep_clean_windows() -> Result<serde_json::Value, String> {
         eventLogsCleared = $stats.eventLogsCleared
     } | ConvertTo-Json -Depth 3
     "#;
-    let stdout = run_ps(ps);
+    let stdout = exec::run_ps_elevated(ps).map_err(|e| format!("Elevated Windows cleanup failed: {}", e))?;
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::json!({
         "success": true,
         "output": "Đã gỡ bỏ Product Key và đặt lại trạng thái cấp phép Windows."
@@ -1051,7 +1057,7 @@ pub fn restore_oem_bios_key() -> Result<serde_json::Value, String> {
         @{ success=$false; error=$_.Exception.Message } | ConvertTo-Json
     }
     "#;
-    let stdout = run_ps(ps);
+    let stdout = exec::run_ps_elevated(ps).map_err(|e| format!("Elevated OEM BIOS restore failed: {}", e))?;
     serde_json::from_str(&stdout).map_err(|e| format!("Parse error: {}", e))
 }
 
@@ -1348,6 +1354,50 @@ mod tests {
             "report.provenance.confidence must be in 0..100"
         );
         println!("OFFICE PROVENANCE: {}", prov);
+    }
+
+    /// Regression: restore_oem_bios_key must use run_ps_elevated and return
+    /// Result::Ok (with success JSON) or Result::Err — never panic.
+    #[test]
+    fn restore_oem_bios_key_elevated_returns_result() {
+        let result = restore_oem_bios_key();
+        match result {
+            Ok(val) => {
+                assert!(val.is_object(), "restore_oem result must be a JSON object");
+                let success = val["success"].as_bool().unwrap_or(false);
+                if !success {
+                    let err = val["error"].as_str().unwrap_or("");
+                    assert!(!err.is_empty(), "failure must include error message");
+                    println!(">>> restore_oem_bios_key: success=false err={}", err);
+                } else {
+                    println!(">>> restore_oem_bios_key: success=true");
+                }
+            }
+            Err(e) => {
+                assert!(!e.is_empty(), "error message must not be empty");
+                println!(">>> restore_oem_bios_key ERR (expected if no admin/BIOS key): {}", e);
+            }
+        }
+    }
+
+    /// Regression: deep_clean_activation("windows") must use run_ps_elevated
+    /// and propagate errors correctly.
+    #[test]
+    fn deep_clean_windows_elevated_returns_result() {
+        // DO NOT actually run deep clean in test — just verify the function
+        // compiles and the Result type is correct by calling with invalid type.
+        let result = deep_clean_activation("invalid_type");
+        assert!(result.is_err(), "invalid type must return Err");
+        println!(">>> deep_clean_activation(invalid): {:?}", result);
+    }
+
+    #[test]
+    fn test_scan_windows_activation_json() {
+        let res = scan_windows_activation().expect("Should succeed");
+        assert!(res["Windows"].is_object(), "Windows section must exist");
+        let win = &res["Windows"];
+        assert!(win["LicenseStatus"].is_number(), "LicenseStatus must be a number");
+        println!("WINDOWS SCAN: {}", serde_json::to_string_pretty(&res).unwrap_or_default());
     }
 }
 

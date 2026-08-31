@@ -5,6 +5,15 @@ use std::sync::{Mutex, OnceLock};
 use std::os::windows::process::CommandExt;
 use tauri::Emitter;
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "", &url])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Single-flight gates for startup-heavy queries. Only ONE PowerShell process
 /// per gate is ever spawned concurrently; late callers join the in-flight
 /// computation via a cloneable broadcast receiver (see `singleflight.rs`).
@@ -909,6 +918,7 @@ verify_bios_restore,
 create_system_restore_point,
             set_metrics_interval,
             open_system_tool,
+            open_url,
         ])
 
         .plugin(tauri_plugin_dialog::init())

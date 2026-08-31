@@ -1,11 +1,6 @@
 use crate::commands::exec;
 use std::collections::HashSet;
 
-// ── Local PS wrapper (hidden window, BOM script) ──
-fn run_ps(script: &str) -> String {
-    String::from_utf8_lossy(&exec::run_ps_raw(script).stdout).to_string()
-}
-
 /// BackupManager — snapshot licensing state before mutating deep-clean operations
 pub fn create_backup() -> Result<serde_json::Value, String> {
     let ps = r#"
@@ -49,7 +44,7 @@ pub fn create_backup() -> Result<serde_json::Value, String> {
 
     @{ success=$true; backupId=$id; path=$dir; count=$items.Count } | ConvertTo-Json -Compress
     "#;
-    let stdout = run_ps(ps);
+    let stdout = exec::run_ps_elevated(ps).map_err(|e| format!("Elevated backup failed: {}", e))?;
     let json = exec::extract_json(&stdout);
     Ok(serde_json::from_str(json).unwrap_or(serde_json::json!({
         "success": false,
@@ -92,7 +87,7 @@ pub fn rollback_backup(backup_id: &str) -> Result<serde_json::Value, String> {
                     $status = 'failed'
                     $reason = 'reg.exe import lỗi (code ' + $LASTEXITCODE + '): ' + $err
                     if ($err -match 'registry') {{
-                        $reason = 'Không thể ghi khóa SPP bị Windows chặn quyền (manager/slpp, kể cả tài khoản SYSTEM). Dùng slmgr /ipk để nạp lại key nếu cần.'
+                        $reason = 'Không thể ghi khóa SPP do thiếu quyền UAC elevation. Cần chạy với quyền Administrator.'
                     }}
                     $failed += $item.path
                 }}
@@ -121,7 +116,7 @@ pub fn rollback_backup(backup_id: &str) -> Result<serde_json::Value, String> {
     "#,
         id = safe_id
     );
-    let stdout = run_ps(&ps);
+    let stdout = exec::run_ps_elevated(&ps).map_err(|e| format!("Elevated rollback failed: {}", e))?;
     let json = exec::extract_json(&stdout);
     Ok(serde_json::from_str(json).unwrap_or(serde_json::json!({
         "success": false,
@@ -269,5 +264,61 @@ mod tests {
         let res = verify_bios_restore(None).expect("should run");
         assert!(res["passed"].is_boolean());
         assert!(res["issues"].is_array());
+    }
+
+    /// Regression: create_backup must use run_ps_elevated and propagate errors.
+    /// On a system with UAC, this should succeed (returns Ok with backup JSON)
+    /// or fail gracefully (returns Err from run_ps_elevated) — never panic.
+    #[test]
+    fn create_backup_elevated_returns_result() {
+        let result = create_backup();
+        match result {
+            Ok(val) => {
+                assert!(val.is_object(), "backup result must be a JSON object");
+                assert!(val.get("success").is_some(), "backup must have 'success' field");
+                println!(">>> create_backup OK: {:?}", val);
+            }
+            Err(e) => {
+                assert!(!e.is_empty(), "error message must not be empty");
+                assert!(e.contains("Elevated"), "error should mention elevation: {}", e);
+                println!(">>> create_backup ERR (expected if no admin): {}", e);
+            }
+        }
+    }
+
+    /// Regression: rollback_backup with invalid ID must return Err, not panic.
+    #[test]
+    fn rollback_backup_invalid_id_is_error() {
+        let result = rollback_backup("'; Remove-Item C:\\ -Recurse -Force; #");
+        match result {
+            Ok(val) => {
+                // Should return success=false with error, not actually delete anything
+                let success = val["success"].as_bool().unwrap_or(true);
+                assert!(!success, "invalid backup_id should return success=false");
+                println!(">>> rollback_backup invalid ID: {:?}", val);
+            }
+            Err(e) => {
+                println!(">>> rollback_backup invalid ID ERR: {}", e);
+            }
+        }
+    }
+
+    /// Raw run_ps_elevated failure: proves the elevation mechanism returns real
+    /// errors, not silent Ok(""). This is the SAME mechanism used by all 5 fixed
+    /// functions after the Part A fix.
+    #[test]
+    fn run_ps_elevated_failing_script_returns_err() {
+        let bad_ps = "Throw 'SIMULATED_ELEVATED_FAILURE'";
+        let result = crate::commands::exec::run_ps_elevated(bad_ps);
+        match result {
+            Ok(raw) => {
+                panic!("run_ps_elevated with Throw should return Err, got Ok: {}", raw);
+            }
+            Err(e) => {
+                assert!(e.contains("SIMULATED_ELEVATED_FAILURE"),
+                    "error should contain the Throw message, got: {}", e);
+                println!(">>> run_ps_elevated Throw test: Err(\"{}\")", e);
+            }
+        }
     }
 }

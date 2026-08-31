@@ -1,6 +1,6 @@
 [package]
 name = "pccare-master-pro"
-version = "2.0.2"
+version = "2.0.3"
 description = "Thien Phat Tech Toolkit Pro (Tauri)"
 authors = ["Thien Phat Tech"]
 license = "MIT"

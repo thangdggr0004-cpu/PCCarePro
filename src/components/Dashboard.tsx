@@ -1008,7 +1008,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               <Phone className="w-3.5 h-3.5 text-emerald-400" /> 0787 567 870
             </span>
             <button
-              onClick={() => window.open('https://www.facebook.com/ThangDG/', '_blank')}
+              onClick={() => (window as any).electronAPI?.openUrl?.('https://www.facebook.com/HKDThienPhat')}
               className="flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
             >
               <Facebook className="w-3.5 h-3.5" /> ThắngĐG

@@ -9,24 +9,13 @@ const translateBackendString = (str) => {
   return typeof str === 'string' ? str : JSON.stringify(str);
 };
 
-const getRiskLevel = (status: string) => {
-  switch (status) {
-    case 'GENUINE':
-      return { label: 'Thấp', color: 'text-emerald-700 bg-emerald-50 border-emerald-200' };
-    case 'WARNING':
-      return { label: 'Trung bình', color: 'text-amber-700 bg-amber-50 border-amber-200' };
-    case 'TAMPERED':
-      return { label: 'Cao', color: 'text-red-700 bg-red-50 border-red-200' };
-    case 'CRITICAL':
-      return { label: 'Nghiêm trọng', color: 'text-rose-800 bg-rose-100 border-rose-300' };
-    default:
-      return { label: 'Chưa xác định', color: 'text-slate-700 bg-slate-100 border-slate-200' };
-  }
-};
 
 const translateFieldValue = (str) => {
   if (!str) return 'Kh\u00f4ng c\u00f3 d\u1eef li\u1ec7u';
-  if (typeof str !== 'string') return str;
+  if (typeof str !== 'string') {
+    if (typeof str === 'object') return JSON.stringify(str);
+    return String(str);
+  }
   let translated = str;
 
   if (translated.includes('The machine is permanently activated.')) {
@@ -806,6 +795,20 @@ export default function LicenseManager() {
     return { status: 'UNKNOWN', label: 'Không xác định', color: 'slate' };
   }, [windowsScanResult, windowsSteps, winData]);
 
+  // Confidence tính từ diagnostic steps — không còn hardcode
+  // Chỉ đếm bước có status là clean/warning/danger (loại bỏ 'idle')
+  const windowsConfidence = useMemo(() => {
+    if (!windowsScanResult) return 0;
+    const classified = windowsSteps.filter(s => s.status === 'clean' || s.status === 'warning' || s.status === 'danger');
+    const total = classified.length || 1;
+    const clean = classified.filter(s => s.status === 'clean').length;
+    const warn = classified.filter(s => s.status === 'warning').length;
+    const danger = classified.filter(s => s.status === 'danger').length;
+    // Weighted: clean=100, warning=60, danger=0
+    const score = (clean * 100 + warn * 60 + danger * 0) / total;
+    return Math.round(score);
+  }, [windowsScanResult, windowsSteps]);
+
   const forensicData = windowsScanResult?.Forensics;
   const collectorTelemetry = Array.isArray(forensicData?.collectors) ? forensicData.collectors : [];
   const engineDecision = forensicData?.decision ?? null;
@@ -1129,7 +1132,7 @@ export default function LicenseManager() {
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-slate-400">Độ tin cậy hệ thống:</span>
-                          <span className="font-black text-emerald-400 text-sm">100% (Máy sạch)</span>
+                          <span className={`font-black text-sm ${windowsConfidence >= 90 ? 'text-emerald-400' : windowsConfidence >= 60 ? 'text-amber-400' : 'text-rose-400'}`}>{windowsConfidence}% ({windowsConfidence >= 90 ? 'Máy sạch' : windowsConfidence >= 60 ? 'Cần xem xét' : 'Có vấn đề'})</span>
                         </div>
                       </div>
 
@@ -1170,7 +1173,7 @@ export default function LicenseManager() {
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span className="w-5 h-5 rounded-full bg-cyan-500 text-slate-950 flex items-center justify-center font-bold text-[10px]">4</span>
-                            <span>Mức độ tin cậy (100% Máy sạch)</span>
+                            <span>Mức độ tin cậy ({windowsConfidence}% {windowsConfidence >= 90 ? 'Máy sạch' : windowsConfidence >= 60 ? 'Cần xem xét' : 'Có vấn đề'})</span>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                           <div className="flex items-center gap-1.5 shrink-0 font-bold text-slate-200">

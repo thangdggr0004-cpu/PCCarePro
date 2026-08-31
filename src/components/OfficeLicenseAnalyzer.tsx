@@ -3,7 +3,7 @@ import { updateSessionReport } from '../utils/SessionAuditStore.js';
 import { 
   ShieldCheck, 
   AlertTriangle, 
-  Search, 
+  Search,
   RefreshCw, 
   CheckCircle2, 
   XCircle, 
@@ -169,10 +169,11 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
   // Lọc Audit Logs
   const getFilteredLogs = () => {
     if (!report || !report.auditLogs) return [];
-    if (logFilter === 'ALL') return report.auditLogs;
+    if (!logFilter || logFilter === 'ALL') return report.auditLogs;
+    const filter = logFilter.toUpperCase();
     return report.auditLogs.filter((log: any) => 
-      (log.collectorName && log.collectorName.toUpperCase().includes(logFilter)) ||
-      (log.dataSource && log.dataSource.toUpperCase().includes(logFilter))
+      (log.collectorName && log.collectorName.toUpperCase().includes(filter)) ||
+      (log.dataSource && log.dataSource.toUpperCase().includes(filter))
     );
   };
 
@@ -358,10 +359,20 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
             <div className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
               <Zap className="w-4 h-4 text-cyan-400" /> KẾT QUẢ XÁC MINH NGUỒN GỐC BẢN QUYỀN
             </div>
-            <span className="text-xs font-bold font-mono text-cyan-400 flex items-center">
-              Độ tin cậy đánh giá: {report.provenance.confidence}%
-              {renderTooltipIcon('ActivationConfidence')}
-            </span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleRunScanV3}
+                disabled={isScanning}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/20 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} />
+                {isScanning ? 'Đang quét...' : 'Quét lại'}
+              </button>
+              <span className="text-xs font-bold font-mono text-cyan-400 flex items-center">
+                Độ tin cậy đánh giá: {report.provenance.confidence}%
+                {renderTooltipIcon('ActivationConfidence')}
+              </span>
+            </div>
           </div>
 
           {/* ASSESSMENT CARD */}
@@ -440,14 +451,28 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
             </div>
           </div>
 
-          {/* KHUYẾN NGHỊ */}
+          {/* KHUYẾN NGHỊ — TÍNH ĐỘNG TỪ decisionResult/matrix */}
           <div className="bg-[#0e1626] p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 flex items-start gap-2.5">
             <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
             <div className="text-xs leading-relaxed space-y-1">
               <strong className="text-white block font-bold text-xs">Khuyến nghị &amp; Lý do giải thích:</strong>
               <div className="text-slate-400 font-medium space-y-1 text-xs">
-                <div>✓ Không cần khôi phục vì: <strong>Registry sạch, DLL chính hãng Microsoft, tệp hệ thống không có dấu hiệu can thiệp.</strong></div>
-                <div>✓ Xác minh thêm nguồn KMS nếu cần đối soát máy chủ doanh nghiệp.</div>
+                {decision === 'BLOCK_RESTORE' ? (
+                  <>
+                    <div>⚠️ {report.decisionResult?.reason || 'Hệ thống phát hiện vấn đề cần xử lý.'}</div>
+                    <div>{report.decisionResult?.nextStep || 'Xem chi tiết kết quả quét để xác định phương án xử lý phù hợp.'}</div>
+                  </>
+                ) : targetActionsCount > 0 ? (
+                  <>
+                    <div>⚠️ Phát hiện vấn đề cần khôi phục. Xem chi tiết tại "Kế Hoạch Khôi Phục".</div>
+                    <div>Sao lưu dữ liệu quan trọng trước khi thực hiện khôi phục.</div>
+                  </>
+                ) : (
+                  <>
+                    <div>✓ Không cần khôi phục vì: <strong>{report.decisionResult?.reason || 'Hệ thống sạch, không phát hiện dấu hiệu can thiệp.'}</strong></div>
+                    {isKmsMethod && <div>✓ Xác minh thêm nguồn KMS nếu cần đối soát máy chủ doanh nghiệp.</div>}
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -463,7 +488,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
             className="w-full h-10 px-4 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 transition-all active:scale-95 cursor-pointer disabled:opacity-50"
           >
             {isScanning ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-            {isScanning ? 'ĐANG QUÉT...' : 'BẮT ĐẦU KIỂM TRA OFFICE'}
+            {isScanning ? 'ĐANG QUÉT...' : report ? 'KIỂM TRA LẠI' : 'BẮT ĐẦU KIỂM TRA OFFICE'}
           </button>
 
           <button
