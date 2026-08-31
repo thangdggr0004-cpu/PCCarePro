@@ -8,3 +8,9 @@ src-tauri/mykey.key
 src-tauri/mykey.key.pub
 src-tauri/mykey_nopw.key
 src-tauri/mykey_nopw.key.pub
+
+# Signing keys - NEVER commit
+*.key
+*.key.sig
+mykey*
+updater*
