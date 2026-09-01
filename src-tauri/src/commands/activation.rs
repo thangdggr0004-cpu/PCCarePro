@@ -175,14 +175,22 @@ pub fn scan_windows_activation() -> Result<serde_json::Value, String> {
         }
     } catch {}
 
+    # ---- KMS38 / FakeKMS detection (đã siết độ chính xác, parity với detect_kms38 + detect_fake_kms) ----
+    # Regex token năm "2038": khớp "2038" là số 4 chữ số độc lập (không bị bao
+    # bởi chữ số) — tránh false positive từ build number như "20380" hay
+    # substring lạc chỗ. Không dùng "2038" / "203[0-9]" dạng substring nữa.
+    $year2038Pattern = "(?<!\d)2038(?!\d)"
+
     # IsKMS38: Detect KMS38 activation (token with 2038 expiry)
     $result.System.IsKMS38 = $false
     try {
         $xprOutput = [string]$result.Windows.Xpr
-        if ($xprOutput -and $xprOutput -match "2038") {
+        # T1: token năm "2038" độc lập trong /xpr
+        if ($xprOutput -and $xprOutput -match $year2038Pattern) {
             $result.System.IsKMS38 = $true
         }
 
+        # T2: folder store_test tồn tại (đã verify không tồn tại mặc định trên máy chuẩn)
         $kms38StorePaths = @("$env:SystemRoot\System32\spp\store_test")
         if (-not $result.System.IsKMS38) {
             foreach ($sp in $kms38StorePaths) {
@@ -190,8 +198,9 @@ pub fn scan_windows_activation() -> Result<serde_json::Value, String> {
             }
         }
 
+        # T3: Grace=0 + VOLUME_KMSCLIENT + token năm "2038" (regex cũ "203[0-9]" quá rộng)
         if (-not $result.System.IsKMS38 -and $result.Windows.GracePeriodRemaining -eq 0 -and
-            $result.Windows.Channel -eq "VOLUME_KMSCLIENT" -and $xprOutput -match "203[0-9]") {
+            $result.Windows.Channel -eq "VOLUME_KMSCLIENT" -and $xprOutput -match $year2038Pattern) {
             $result.System.IsKMS38 = $true
         }
     } catch {}
@@ -203,21 +212,43 @@ pub fn scan_windows_activation() -> Result<serde_json::Value, String> {
         if ($kmsHost -and $kmsHost.Trim().Length -gt 0 -and $kmsHost -ne "N/A") {
             $kmsHostLower = $kmsHost.Trim().ToLower()
 
-            # 1. Known fake/pirate KMS domain patterns
-            $fakePatterns = @("0.0.0.0","127.0.0.","localhost","loli","digiboy","msguides","zdf","kms.","kms8.","kms9.",
-                              "skms.","vlmcs.","kmsauto","aact","kms4dotnet","kms-activation","novaxm","xinso")
-            foreach ($pat in $fakePatterns) {
+            # 1. Pattern giả RÕ RÀNG (tên tool / nguồn pirate) — KHÔNG gồm "kms."
+            #    chung chung (trước gây false positive với kms.digitalrivercontent.net).
+            #    kms8./kms9./skms. cũng bỏ khỏi substring vì không đủ căn cứ đứng riêng.
+            $distinctivePatterns = @("0.0.0.0","127.0.0.","localhost","loli","digiboy","msguides","zdf",
+                                     "vlmcs.","kmsauto","aact","kms4dotnet","kms-activation","novaxm","xinso")
+            foreach ($pat in $distinctivePatterns) {
                 if ($kmsHostLower -match [regex]::Escape($pat)) { $result.System.IsFakeKMS = $true; break }
             }
 
-            # 2. Try DNS resolution: if KMS host resolves to localhost IPs → fake
+            # 2. DNS resolution: resolves về localhost → fake; resolves về IP public → hợp lệ
+            $hasPublicDns = $false
             if (-not $result.System.IsFakeKMS) {
                 try {
                     $resolved = [System.Net.Dns]::GetHostAddresses($kmsHostLower) | Select-Object -ExpandProperty IPAddressToString
-                    foreach ($ip in $resolved) {
-                        if ($ip -match "^127\.|^0\.0\.0\.|^::1$") { $result.System.IsFakeKMS = $true; break }
+                    if ($resolved) {
+                        foreach ($ip in $resolved) {
+                            if ($ip -match "^127\.|^0\.0\.0\.|^::1$") { $result.System.IsFakeKMS = $true; break }
+                        }
+                        # nếu resolve ra ít nhất 1 IP public → KMS hợp lệ, không flag
+                        $publicResolved = @($resolved | Where-Object { $_ -notmatch "^127\.|^0\.0\.0\.|^::1$" })
+                        if ($publicResolved.Count -gt 0) {
+                            $result.System.IsFakeKMS = $false
+                            $hasPublicDns = $true
+                        }
                     }
                 } catch {}
+            }
+
+            # 3. Chỉ khi KHÔNG có bằng chứng DNS public: flag host bắt đầu bằng "kms."
+            #    và KHÔNG phải domain phân phối/license hợp lệ của Microsoft
+            if (-not $result.System.IsFakeKMS -and -not $hasPublicDns -and $kmsHostLower -match "^(kms)\.") {
+                $legitDomains = @("digitalrivercontent.net","microsoft.com","microsoftonline.com")
+                $isLegit = $false
+                foreach ($d in $legitDomains) {
+                    if ($kmsHostLower -match [regex]::Escape($d)) { $isLegit = $true; break }
+                }
+                if (-not $isLegit) { $result.System.IsFakeKMS = $true }
             }
         }
     } catch {}
@@ -240,6 +271,110 @@ pub fn scan_windows_activation() -> Result<serde_json::Value, String> {
 
     parsed["success"] = serde_json::json!(true);
     Ok(parsed)
+}
+
+/// Trả về `true` nếu chuỗi `xpr` chứa "2038" dạng token năm 4 chữ số độc lập
+/// (có ranh giới ký tự không-phải-digit ở cả 2 phía). Tránh false positive
+/// như "20380" (build number) hay substring lạc chỗ.
+fn xpr_contains_2038_year(xpr: &str) -> bool {
+    let bytes = xpr.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'2'
+            && bytes.get(i + 1) == Some(&b'0')
+            && bytes.get(i + 2) == Some(&b'3')
+            && bytes.get(i + 3) == Some(&b'8')
+        {
+            // ký tự trước "2038" (nếu có) không phải digit
+            let before_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
+            // ký tự sau "2038" (nếu có) không phải digit
+            let after_ok = bytes.get(i + 4).map(|c| !c.is_ascii_digit()).unwrap_or(true);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Pure KMS38 detection mirroring the PowerShell in `scan_windows_activation`.
+/// 3 trigger (đúng thứ tự ưu tiên như PS), nhưng đã siết độ chính xác:
+///   T1: xpr chứa token năm "2038" (4 chữ số độc lập — không phải substring
+///       "2038" lạc chỗ như build number "20380")
+///   T2: folder `store_test` tồn tại (đã verify KHÔNG tồn tại mặc định trên
+///       máy chuẩn — chỉ có store, tokens, plugin-manifests-signed)
+///   T3: GracePeriodRemaining == 0 VÀ channel == "VOLUME_KMSCLIENT"
+///       VÀ xpr chứa token năm "2038" (regex cũ "203[0-9]" quá rộng, đã thu hẹp)
+/// Trả về `true` nếu bất kỳ trigger nào bật.
+#[allow(dead_code)]
+fn detect_kms38(xpr: &str, store_test_exists: bool, grace_period_remaining: u32, channel: &str) -> bool {
+    // T1 — token năm 2038 chính xác
+    if xpr_contains_2038_year(xpr) {
+        return true;
+    }
+    // T2
+    if store_test_exists {
+        return true;
+    }
+    // T3 — Grace=0 + VOLUME_KMSCLIENT + token năm 2038 (regex cũ "203[0-9]" đã thu hẹp)
+    if grace_period_remaining == 0 && channel == "VOLUME_KMSCLIENT" && xpr_contains_2038_year(xpr) {
+        return true;
+    }
+    false
+}
+
+/// Pure FakeKMS detection mirroring (và siết lại) logic PowerShell trong
+/// `scan_windows_activation`. KMS host bị coi là "fake/pirate" nếu:
+///   1. khớp pattern giả RÕ RÀNG (chuỗi con đặc trưng, không gây false positive)
+///   2. host bắt đầu bằng `kms.` NHƯNG không thuộc domain phân phối hợp lệ
+///      (digitalrivercontent.net / microsoft.com / microsoftonline.com)
+///   3. DNS resolves về localhost (127.x / 0.0.0.0 / ::1)
+/// Điểm mấu chốt — SỬA false positive "kms.":
+///   - KHÔNG dùng `-match` substring for `"kms."` (trước đây bắt cả
+///     `kms.digitalrivercontent.net` — domain hợp lệ của Microsoft).
+///   - Nếu DNS resolves host về IP public → xem là KMS hợp lệ, KHÔNG flag.
+#[allow(dead_code)]
+fn detect_fake_kms(kms_host: &str, resolved_ips: &[String]) -> bool {
+    let kms_host = kms_host.trim();
+    // host rỗng hoặc "N/A" → không phải fake (không có host)
+    if kms_host.is_empty() || kms_host == "N/A" {
+        return false;
+    }
+    let lower = kms_host.to_lowercase();
+
+    // 1. Patterns giả RÕ RÀNG (chuỗi con đặc trưng) — KHÔNG gồm "kms." chung chung
+    let distinctive_patterns = [
+        "0.0.0.0", "127.0.0.", "localhost", "loli", "digiboy", "msguides", "zdf",
+        "kmsauto", "aact", "kms4dotnet", "kms-activation", "novaxm", "xinso", "vlmcs.",
+    ];
+    for pat in distinctive_patterns {
+        if lower.contains(pat) {
+            return true;
+        }
+    }
+
+    // 2. Nếu DNS resolves ra IP public → KMS hợp lệ (không flag), cho dù tên có "kms."
+    if !resolved_ips.is_empty() {
+        let all_public = resolved_ips
+            .iter()
+            .all(|ip| !(ip.starts_with("127.") || ip == "0.0.0.0" || ip == "::1"));
+        if all_public {
+            return false;
+        }
+        // có IP localhost trong DNS → fake
+        return true;
+    }
+
+    // 3. Không có DNS: chỉ flag khi host bắt đầu bằng "kms." và KHÔNG phải
+    //    domain phân phối/license hợp lệ của Microsoft
+    let legit_domains = [
+        "digitalrivercontent.net", "microsoft.com", "microsoftonline.com",
+    ];
+    let is_known_legit = legit_domains.iter().any(|d| lower.contains(d));
+    if lower.starts_with("kms.") && !is_known_legit {
+        return true;
+    }
+
+    false
 }
 
 /// Lightweight Office summary for scan_activation (Dstatus, Products, OhookFiles) — parity Electron
@@ -452,8 +587,6 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
         }
     }
 
-    $licData.confidence = [math]::Min(100, $licData.sourcesUsed.Length * 25)
-
     $isLicensed = ($licData.licenseStatus -eq "LICENSED")
 
     # 3. COLLECTOR 2: AuthenticodeCollector (System32 sppc.dll & osppc.dll)
@@ -526,6 +659,13 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     $isWmiVerified = ($licData.sourcesUsed -contains "WMI_SoftwareLicensingProduct")
 
     # --- BUILD EVIDENCE MATRIX ---
+    # 8 collectors, mỗi collector có confidenceWeight.
+    # LƯU Ý TRỌNG SỐ (10/20/25/25/20/15/10/15):
+    #   Tổng trọng số = 120 (KHÔNG phải 100).
+    #   <CHƯA CÓ CĂN CỨ> — các con số này được chọn theo cảm tính ban đầu,
+    #   không có tài liệu hay dữ liệu thực tế nào ghi lại lý do. Điểm số cuối
+    #   đang chia cho 120 (tổng weight), nên kết quả là % thực / 120.
+    #   Cần xác nhận/hiệu chỉnh dựa trên dữ liệu thực tế.
     $matrix = @(
         @{
             componentName = "Office SKU ($($sku.skuName))"
@@ -586,6 +726,12 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     )
 
     # --- CONFIDENCE ENGINE CALCULATION ---
+    # Công thức: % = Σ(weight × multiplier) / Σ(weight) × 100
+    #   PASS   → multiplier = 1.0
+    #   WARNING→ multiplier = 0.5
+    #   FAIL   → multiplier = 0.0 (không cộng gì)
+    # <CHƯA CÓ CĂN CỨ> cho multiplier WARNING = 0.5 và ngưỡng badge
+    # (95/80/60). Các con số này tự chọn, cần xác nhận/hiệu chỉnh theo dữ liệu.
     $totalWeight = 0
     $weightedScore = 0
     foreach ($item in $matrix) {
@@ -700,7 +846,6 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     $actMethod = "Không đủ bằng chứng để xác định phương thức kích hoạt."
     $actSource = "Chưa xác định"
     $provenanceConfidence = 50
-    if ($null -ne $licData.confidence) { $provenanceConfidence = [int]$licData.confidence }
     $recommendationText = "Theo dõi & Kiểm tra định kỳ"
 
     if ($actStatus -eq "LICENSED" -or $isKmsClient) {
@@ -1398,6 +1543,171 @@ mod tests {
         let win = &res["Windows"];
         assert!(win["LicenseStatus"].is_number(), "LicenseStatus must be a number");
         println!("WINDOWS SCAN: {}", serde_json::to_string_pretty(&res).unwrap_or_default());
+    }
+
+    // ------------------------------------------------------------------
+    // PART 2 — KMS38 detection (3 triggers)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn kms38_t1_matches_2038_in_expiry_line() {
+        // T1: xpr chứa "2038" ở bất kỳ vị trí → KMS38
+        assert!(detect_kms38(
+            "Windows(R) Enterprise: The machine is activated until 2038/01/19 12:00.",
+            false, 0, "VOLUME_KMSCLIENT",
+        ));
+    }
+
+    #[test]
+    fn kms38_t1_also_when_xpr_contains_2038_elsewhere() {
+        // "2038" xuất hiện ngay cả khi GracePeriod khác 0 / channel khác KMS
+        // → vẫn đúng trigger T1 (T1 không phụ thuộc điều kiện khác).
+        assert!(detect_kms38("some 2038 note", false, 1000, "OEM"));
+    }
+
+    #[test]
+    fn kms38_t2_store_test_folder_exists() {
+        // T2: folder store_test tồn tại → KMS38
+        assert!(detect_kms38("", true, 60, "VOLUME_KMSCLIENT"));
+    }
+
+    #[test]
+    fn kms38_t3_grace_zero_volume_channel_and_203x() {
+        // Kịch bản KMS38 THẬT: máy VOLUME activated đến năm 2038 viết đúng token
+        // "2038" trong xpr, Grace=0 → vẫn được phát hiện.
+        assert!(detect_kms38(
+            "activated until 2038-01-19", false, 0, "VOLUME_KMSCLIENT",
+        ));
+    }
+
+    #[test]
+    fn kms38_t3_no_longer_matches_narrowed_regex_2035() {
+        // SỬA T3: regex cũ "203[0-9]" quá rộng — khớp cả 2030..2039 gây false
+        // positive (vd máy activated đến 2035 thì KHÔNG phải KMS38).
+        // Giờ chỉ token năm "2038" chính xác được tính.
+        assert!(!detect_kms38("activated until 2035", false, 0, "VOLUME_KMSCLIENT"));
+        // cả T1 cũng không bắt "2035" (không phải "2038")
+        assert!(!detect_kms38("until 2035 anywhere", false, 0, "VOLUME_KMSCLIENT"));
+    }
+
+    #[test]
+    fn kms38_t1_no_longer_matches_substring_like_build_number() {
+        // SỬA T1: cũ khớp "2038" là substring (bắt cả "20380" build number).
+        // Giờ chỉ token năm độc lập "2038" — "20380" / "x20380" không bị bắt.
+        assert!(!detect_kms38("build 20380 enrolled", false, 0, "OEM"));
+        assert!(!detect_kms38("102038 extension", false, 0, "OEM"));
+        // vẫn bắt "2038" đứng độc lập giữa text
+        assert!(detect_kms38("activated until 2038", false, 0, "OEM"));
+    }
+
+    #[test]
+    fn kms38_channel_and_grace_scenarios() {
+        // Sau khi siết độ chính xác: token năm "2038" độc lập là dấu hiệu
+        // KMS38 mạnh → detect cho dù channel là gì (T1). Máy hợp lệ bình
+        // thường không hiển thị "2038" trong /xpr.
+        assert!(detect_kms38("activated until 2038", false, 0, "OEM"));
+        assert!(detect_kms38("activated until 2038", false, 0, "RETAIL"));
+        assert!(detect_kms38("activated until 2038", false, 90, "VOLUME_KMSCLIENT"));
+        // Còn các tổ hợp KHÔNG có token "2038" → không phát hiện
+        assert!(!detect_kms38("permanently activated", false, 0, "VOLUME_KMSCLIENT"));
+        assert!(!detect_kms38("activated until 2035", false, 0, "VOLUME_KMSCLIENT"));
+    }
+
+    #[test]
+    fn kms38_all_false_when_no_indicator() {
+        // Không trigger nào: không có "2038", không store_test, không đủ T3
+        assert!(!detect_kms38("permanently activated", false, 0, "OEM"));
+        // Grace=0 nhưng channel khác VOLUME và xpr không khớp 203x
+        assert!(!detect_kms38("no year number", false, 0, "VOLUME_KMSCLIENT"));
+    }
+
+    #[test]
+    fn kms38_t3_does_not_match_203_at_other_digit() {
+        // "203" theo sau bởi ký tự KHÔNG phải số (vd "203s") → T3 không khớp regex 203[0-9]
+        assert!(!detect_kms38("until 203s", false, 0, "VOLUME_KMSCLIENT"));
+    }
+
+    // ------------------------------------------------------------------
+    // PART 2 — FakeKMS detection (host → resolves localhost)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fakekms_empty_or_na_host_is_not_fake() {
+        assert!(!detect_fake_kms("", &[]));
+        assert!(!detect_fake_kms("   ", &[]));
+        assert!(!detect_fake_kms("N/A", &[]));
+    }
+
+    #[test]
+    fn fakekms_known_distinctive_fake_patterns_detected() {
+        // Các pattern giả RÕ RÀNG (tên tool / nguồn pirate) vẫn bị bắt,
+        // kể cả không có DNS (case-insensitive)
+        for host in [
+            "0.0.0.0", "127.0.0.1", "localhost", "loli.kms.local", "digiboy", "msguides",
+            "zdf", "kmsauto.myhost", "aact.ru", "kms4dotnet", "kms-activation",
+            "novaxm", "xinso.kms", "vlmcs.xyz",
+        ] {
+            assert!(detect_fake_kms(host, &[]), "host '{}' must be flagged as fake", host);
+        }
+    }
+
+    #[test]
+    fn fakekms_ambiguous_prefix_needs_dns_evidence_to_flag() {
+        // kms8./kms9./skms. là pattern KHÔNG đủ căn cứ đứng riêng → không flag
+        // khi thiếu bằng chứng DNS (an toàn hơn, tránh false positive).
+        assert!(!detect_fake_kms("kms8.abc.local", &[]));
+        assert!(!detect_fake_kms("kms9.abc.local", &[]));
+        assert!(!detect_fake_kms("skms.internal", &[]));
+        // NHƯNG vẫn bị bắt khi DNS resolves về localhost (dấu hiệu fake rõ)
+        assert!(detect_fake_kms("kms8.abc.local", &["127.0.0.1".to_string()]));
+        assert!(detect_fake_kms("skms.internal", &["0.0.0.0".to_string()]));
+    }
+
+    #[test]
+    fn fakekms_dns_resolves_to_localhost() {
+        // host sạch về pattern nhưng DNS resolves về 127.x → fake
+        assert!(detect_fake_kms("10.0.0.50", &["127.0.0.1".to_string()]));
+        assert!(detect_fake_kms("kms-server.example", &["::1".to_string()]));
+        assert!(detect_fake_kms("kms-server.example", &["0.0.0.0".to_string()]));
+    }
+
+    #[test]
+    fn fakekms_legit_microsoft_distribution_kms_not_flagged() {
+        // REGRESSION FIX (item 4): kms.digitalrivercontent.net là domain phân
+        // phối license CHÍNH THỨC của Microsoft. Trước đây bị flag "fake" do
+        // pattern "kms." khớp substring. Giờ KHÔNG còn bị flag:
+        //   - DNS resolves về IP public (40.86.55.83) → KMS hợp lệ
+        assert!(
+            !detect_fake_kms("kms.digitalrivercontent.net", &["40.86.55.83".to_string()]),
+            "domain phân phối hợp lệ của Microsoft không được flag fake"
+        );
+        //   - Kể cả khi DNS không trả về: vẫn không flag vì thuộc legit domain
+        assert!(
+            !detect_fake_kms("kms.digitalrivercontent.net", &[]),
+            "domain hợp lệ không bị flag ngay cả khi thiếu DNS"
+        );
+    }
+
+    #[test]
+    fn fakekms_display_microsoft_activation_server_unflagged() {
+        // Đây là host legit không chứa pattern giả nào và resolves về IP public
+        // → PHẢI không bị gắn cờ. (contrast với false positive ở trên)
+        assert!(!detect_fake_kms("activation-v2.sls.microsoft.com", &["20.44.90.60".to_string()]));
+    }
+
+    #[test]
+    fn fakekms_resolved_public_ip_not_fake() {
+        // DHCP/trên mạng nội bộ host sạch (không pattern giả) + IP public → không fake
+        assert!(!detect_fake_kms("valid.license.contoso.com", &["8.8.8.8".to_string()]));
+    }
+
+    #[test]
+    fn fakekms_public_dns_overrides_kms_prefix() {
+        // Host bắt đầu bằng "kms." nhưng DNS resolve ra IP public → KHÔNG flag
+        // (bằng chứng DNS hợp lệ mạnh hơn giả định từ tên). parity với PS rule-3 guard.
+        assert!(!detect_fake_kms("kms.contoso-public.aws", &["52.10.1.1".to_string()]));
+        // Host bắt đầu bằng "kms." + KHÔNG có DNS, không phải legit domain → vẫn flag (thận trọng)
+        assert!(detect_fake_kms("kms.10banh.local", &[]));
     }
 }
 

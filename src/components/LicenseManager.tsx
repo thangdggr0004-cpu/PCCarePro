@@ -534,7 +534,6 @@ export default function LicenseManager() {
     if (!result || !result.Windows) return;
 
     const newSteps = JSON.parse(JSON.stringify(initialWindowsSteps));
-    let riskScore = 0;
     const evidences: string[] = [];
 
     // === TIER 1: Khóa BIOS OA3 Verification ===
@@ -547,7 +546,6 @@ export default function LicenseManager() {
     if (hasOA3) {
         newSteps[0].status = 'clean';
         newSteps[0].details.push(`✅ Có OA3 Key (***${result.Windows.OA3Key})`);
-        riskScore -= 70;
     } else {
         if (channel.includes('OEM_DM')) {
             newSteps[0].status = 'warning';
@@ -577,11 +575,9 @@ export default function LicenseManager() {
     
     if (isKms38) {
         newSteps[3].status = 'danger';
-        riskScore += 90;
         newSteps[3].details.push('⚠️ Phát hiện KMS38 Hook (Năm 2038)');
     } else if (isFakeKms || (kmsHost && kmsHost.match(/loli|digiboy|msguides|zdf|0\.0\.0\.0|kms|crack/))) {
         newSteps[3].status = 'danger';
-        riskScore += 80;
         newSteps[3].details.push(`⚠️ Máy chủ KMS chưa xác thực: ${kmsHost}`);
     } else if (kmsHost) {
         newSteps[3].status = 'warning';
@@ -594,7 +590,6 @@ export default function LicenseManager() {
     const piratedFiles = result.System?.PiratedFiles || [];
     if (piratedFiles.length > 0) {
         newSteps[4].status = 'danger';
-        riskScore += 80;
         piratedFiles.forEach((f: string) => newSteps[4].details.push(`⚠️ Tập tin chưa xác thực: ${f}`));
     } else {
         newSteps[4].status = 'clean';
@@ -605,7 +600,6 @@ export default function LicenseManager() {
     const suspiciousServices = result.System?.SuspiciousServices || [];
     if (suspiciousTasks.length > 0 || suspiciousServices.length > 0) {
         newSteps[5].status = 'danger';
-        riskScore += 60;
         suspiciousTasks.forEach((t: any) => newSteps[5].details.push(`⚠️ Task: ${t.Name}`));
         suspiciousServices.forEach((s: string) => newSteps[5].details.push(`⚠️ Service: ${s}`));
     } else {
@@ -617,8 +611,8 @@ export default function LicenseManager() {
     const hostsRedirects = result.System?.HostsRedirects || [];
     const kmsEvents = result.System?.KMSEvents || [];
     
-    if (hasNoGenTicket) { riskScore += 100; newSteps[6].details.push('⚠️ Có khóa chặn NoGenTicket'); }
-    if (hostsRedirects.length > 0) { riskScore += 50; hostsRedirects.forEach((h: string) => newSteps[6].details.push(`⚠️ Hosts: ${h}`)); }
+    if (hasNoGenTicket) { newSteps[6].details.push('⚠️ Có khóa chặn NoGenTicket'); }
+    if (hostsRedirects.length > 0) { hostsRedirects.forEach((h: string) => newSteps[6].details.push(`⚠️ Hosts: ${h}`)); }
     
     if (hasNoGenTicket || hostsRedirects.length > 0) {
         newSteps[6].status = 'danger';
@@ -633,7 +627,6 @@ export default function LicenseManager() {
     const hasMasHistory = result.System?.MasHistory === true;
     if (hasMasHistory) {
         newSteps[2].status = 'danger';
-        riskScore += 100;
         newSteps[2].details.push('⚠️ Ghi nhận dấu vết kích hoạt MAS/HWID trong nhật ký');
     } else if (result.Windows.IsGenericKey && !isLicensed) {
         newSteps[2].status = 'warning';
@@ -672,8 +665,7 @@ export default function LicenseManager() {
     if (!result || !result.Office) return;
 
     const newSteps = JSON.parse(JSON.stringify(initialOfficeSteps));
-    let riskScore = 0;
-    
+
     const officeProducts = result.Office?.Products || [];
     const isLicensed = officeProducts.some((op: any) => op.LicenseStatus === 1);
     
@@ -688,7 +680,6 @@ export default function LicenseManager() {
     const hasKmsProduct = officeProducts.some((op: any) => (op.Description||'').toLowerCase().includes('kms'));
     if (hasKmsProduct) {
         newSteps[1].status = 'warning';
-        riskScore += 30;
         newSteps[1].details.push('⚠️ Đang sử dụng kênh KMS Client');
     } else {
         newSteps[1].status = 'clean';
@@ -698,7 +689,6 @@ export default function LicenseManager() {
     const ohookFiles = result.Office?.OhookFiles || [];
     if (ohookFiles.length > 0) {
         newSteps[2].status = 'danger';
-        riskScore += 90;
         newSteps[2].details.push(`⚠️ Phát hiện DLL có thể là Ohook: ${ohookFiles.join(', ')}`);
     } else {
         newSteps[2].status = 'clean';
@@ -708,7 +698,6 @@ export default function LicenseManager() {
     const piratedFiles = result.System?.PiratedFiles || [];
     if (piratedFiles.length > 0) {
         newSteps[3].status = 'danger';
-        riskScore += 80;
         newSteps[3].details.push(`⚠️ Tồn tại tập tin có dấu hiệu can thiệp: ${piratedFiles.join(', ')}`);
     } else {
         newSteps[3].status = 'clean';
@@ -719,7 +708,6 @@ export default function LicenseManager() {
     const suspiciousServices = result.System?.SuspiciousServices || [];
     if (suspiciousTasks.length > 0 || suspiciousServices.length > 0) {
         newSteps[4].status = 'danger';
-        riskScore += 60;
         newSteps[4].details.push(`⚠️ Tác vụ/dịch vụ tự động chưa xác thực`);
     } else {
         newSteps[4].status = 'clean';
@@ -729,7 +717,6 @@ export default function LicenseManager() {
     const hostsRedirects = result.System?.HostsRedirects || [];
     if (hostsRedirects.length > 0) {
         newSteps[5].status = 'danger';
-        riskScore += 50;
         newSteps[5].details.push(`⚠️ Chặn máy chủ xác thực qua file hosts`);
     } else {
         newSteps[5].status = 'clean';
@@ -795,11 +782,34 @@ export default function LicenseManager() {
     return { status: 'UNKNOWN', label: 'Không xác định', color: 'slate' };
   }, [windowsScanResult, windowsSteps, winData]);
 
-  // Confidence tính từ diagnostic steps — không còn hardcode
-  // Chỉ đếm bước có status là clean/warning/danger (loại bỏ 'idle')
+  // --------------------------------------------------------------------------
+  // ĐỘ TIN CẬY HỆ THỐNG (WINDOWS) — windowsConfidence
+  // --------------------------------------------------------------------------
+  // Công thức: điểm % = Σ(trọng số step) / (số step đã phân loại)
+  //   - clean   = 100 điểm
+  //   - warning = 60 điểm
+  //   - danger  = 0 điểm
+  //   - idle    = bị loại khỏi công thức (chưa phân tích, không tính)
+  //
+  // LƯU Ý: Step 8 ("Đánh giá quy tắc") BỊ LOẠI khỏi công thức.
+  // Lý do: Step 8 chỉ là bước tổng hợp lại 7 bước bằng chứng trước đó (không
+  // phải bằng chứng độc lập). Trước đây nó bị đếm 2 lần — 1 lần qua chính
+  // bước gây warning/danger, 1 lần qua Step 8 "ăn theo" — làm sai lệch điểm.
+  //
+  // Về trọng số 100/60/0: <CHƯA CÓ CĂN CỨ> — đây là các hằng số tự chọn,
+  // không có tài liệu hoặc dữ liệu thực tế nào ghi lại lý do chọn. Cần xác
+  // nhận/hiệu chỉnh dựa trên dữ liệu thực tế nếu muốn dùng làm thước đo tin cậy.
+  //
+  // KNOWN LIMITATION (E1): vì các ngưỡng badge (≥90 / ≥60 / <60) đứng yên,
+  // việc loại Step 8 có thể làm máy có >=2 danger "nhảy" từ "Có vấn đề" sang
+  // "Cần xem xét" (vd: 4c+1w+2d → 58% → 66%). Đây là hành vi đã biết, cố ý
+  // giữ nguyên ngưỡng, dành làm dữ liệu tham khảo cho tái cấu trúc confidence
+  // (Phương án B). KHÔNG vá riêng lẻ ở đây.
+  // --------------------------------------------------------------------------
   const windowsConfidence = useMemo(() => {
     if (!windowsScanResult) return 0;
-    const classified = windowsSteps.filter(s => s.status === 'clean' || s.status === 'warning' || s.status === 'danger');
+    // Chỉ tính các bước bằng chứng thật (step 1-7); loại step 8 (tổng hợp) và idle.
+    const classified = windowsSteps.filter(s => s.id !== 8 && (s.status === 'clean' || s.status === 'warning' || s.status === 'danger'));
     const total = classified.length || 1;
     const clean = classified.filter(s => s.status === 'clean').length;
     const warn = classified.filter(s => s.status === 'warning').length;
@@ -810,8 +820,6 @@ export default function LicenseManager() {
   }, [windowsScanResult, windowsSteps]);
 
   const forensicData = windowsScanResult?.Forensics;
-  const collectorTelemetry = Array.isArray(forensicData?.collectors) ? forensicData.collectors : [];
-  const engineDecision = forensicData?.decision ?? null;
 
 
 
@@ -965,32 +973,6 @@ export default function LicenseManager() {
     if (evidenceSortBy === 'weight') list.sort((a, b) => (b.weight ?? -1) - (a.weight ?? -1));
     return list;
   }, [evidenceList, evidenceFilter, evidenceSearch, evidenceSortBy]);
-
-  // Positive / Negative / Weak evidence
-  const positiveEvidence = evidenceList.filter(e => e.status === 'clean');
-  const negativeEvidence = evidenceList.filter(e => e.status === 'danger');
-  const weakEvidence = evidenceList.filter(e => e.status === 'warning');
-  const unknownEvidence = evidenceList.filter(e => e.status === 'idle');
-  const collectorErrors = collectorTelemetry.flatMap((collector: any) => Array.isArray(collector.errors) ? collector.errors : []);
-
-  // Conflicts
-  const conflicts = useMemo(() => {
-    if (!windowsScanResult) return [];
-    const c: { conflict: string; reason: string; resolution: string }[] = [];
-    // Check: licensed but has danger
-    if (winData?.LicenseStatus === 1 && dangerCount > 0) {
-      c.push({ conflict: 'Trạng thái Licensed -> Có dấu hiệu bất thường', reason: 'Windows báo LICENSED nhưng tồn tại dấu vết KMS/artifact chưa xác thực', resolution: 'Cân nhắc đặt lại trạng thái cấp phép' });
-    }
-    // Check: has OA3 but using generic key
-    if (winData?.HasOA3Key && winData?.IsGenericKey) {
-      c.push({ conflict: 'Khóa OEM khả dụng -> Đang dùng Generic Key', reason: 'BIOS có khóa nhúng OEM nhưng hệ thống đang dùng khóa mặc định (GVLK)', resolution: 'Khôi phục khóa OEM từ BIOS' });
-    }
-    // Check: KMS host exists but no pirated files
-    if (winData?.KeyManagementServiceMachine && (sysData?.PiratedFiles || []).length === 0) {
-      c.push({ conflict: 'Cấu hình KMS Host -> Không tìm thấy tập tin liên quan', reason: 'Hệ thống trỏ đến máy chủ KMS nhưng không thấy tệp liên quan trên ổ đĩa', resolution: 'KMS có thể thuộc mạng Enterprise hợp lệ hoặc đã dọn dẹp tập tin' });
-    }
-    return c;
-  }, [windowsScanResult, winData, sysData, dangerCount]);
 
   // Hướng xử lý
   const recommendation = useMemo(() => {
