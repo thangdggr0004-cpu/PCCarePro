@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTDdWbjFkNDJheXRiWDhUU3IzU3QxZnNuK2RRNmR2UWRFZFljcmZ5QklkanMybFFuK1BXR21Ea3BxM3hoZGlyOGtlWW0wNUp6ZzVDbjNJRWI5VDlTYjV3TlFSaW50Y3d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTk2NDU2CWZpbGU6cGNjYXJlLW1hc3Rlci1wcm8uZXhlCjdOKy9PQ0Q4VFZsUmtVd1NSUTVQbUo0TWIxWHBYN2Z5c2tYN3hldDJXUDd0ZE11d0VaK0ZML1VaNU5SNDU4QStkcEdUaGh2Q0lwOHRaSjBzM08wTEFnPT0K",
-                                             "url":  "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.3/pccare-master-pro.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSaUR4LzVnSklEbmhMd1VObWFrRzd1UlRYdCsreHpzbzRoZmJ5ZGpPaDJ3S1YyYlcyNjhBUncra0c5YnNHMEkrR0xJOWM0WW02RnJzZDVHU0JNYU91M3lQWWsrcnA3YVFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4Mzc4MTAxCWZpbGU6cGNjYXJlLW1hc3Rlci1wcm8uZXhlCmlIN1JKNXNRTG9KODdvZW9KWWhWdkY5eGRLcEt3SW5YYkJPL0VhVm1FWm1hMThyZGhMR0M3Mlc3ZGthKzAvdW1mUWpDbE9wOFlTaEtMeFE4b3B6dEJ3PT0K",
+                                             "url":  "https://github.com/thangdggr0004-cpu/PCCarePro/releases/download/v2.0.4/pccare-master-pro.exe"
                                          }
                   },
-    "pub_date":  "2026-08-31T17:14:42Z",
-    "version":  "2.0.3",
-    "notes":  "PCCareMasterPro v2.0.3 - License Manager fixes + Office rescan button + Facebook link fix"
+    "pub_date":  "2026-09-02T19:59:29.8508321Z",
+    "version":  "2.0.4",
+    "notes":  "PCCareMasterPro v2.0.4 - portable update flow (custom) + fixes"
 }
