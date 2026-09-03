@@ -1,4 +1,5 @@
 use crate::commands::exec;
+use std::net::ToSocketAddrs;
 
 fn run_ps(script: &str) -> String {
     exec::run_ps(script)
@@ -176,6 +177,9 @@ pub fn scan_windows_activation() -> Result<serde_json::Value, String> {
     } catch {}
 
     # ---- KMS38 / FakeKMS detection (đã siết độ chính xác, parity với detect_kms38 + detect_fake_kms) ----
+    # ⚠️ DUAL-IMPLEMENTATION: khối IsFakeKMS bên dưới SONG SONG với hàm Rust
+    # `detect_fake_kms` (dùng cho Office). Nếu sửa logic phát hiện ở đây phải
+    # SỬA ĐỒNG BỘ cả 2 nơi, không chỉnh riêng 1 nơi.
     # Regex token năm "2038": khớp "2038" là số 4 chữ số độc lập (không bị bao
     # bởi chữ số) — tránh false positive từ build number như "20380" hay
     # substring lạc chỗ. Không dùng "2038" / "203[0-9]" dạng substring nữa.
@@ -221,20 +225,25 @@ pub fn scan_windows_activation() -> Result<serde_json::Value, String> {
                 if ($kmsHostLower -match [regex]::Escape($pat)) { $result.System.IsFakeKMS = $true; break }
             }
 
-            # 2. DNS resolution: resolves về localhost → fake; resolves về IP public → hợp lệ
+            # 2. DNS resolution: THỐNG NHẤT với Rust detect_fake_kms — chỉ cần có
+            #    ít nhất 1 IP public trong kết quả resolve là coi là hợp lệ (không
+            #    flag), bất kể có LẪN localhost hay không ("DNS-thắng-tên"). Chỉ
+            #    flag localhost khi resolve KHÔNG có IP public nào.
             $hasPublicDns = $false
             if (-not $result.System.IsFakeKMS) {
                 try {
                     $resolved = [System.Net.Dns]::GetHostAddresses($kmsHostLower) | Select-Object -ExpandProperty IPAddressToString
                     if ($resolved) {
-                        foreach ($ip in $resolved) {
-                            if ($ip -match "^127\.|^0\.0\.0\.|^::1$") { $result.System.IsFakeKMS = $true; break }
-                        }
                         # nếu resolve ra ít nhất 1 IP public → KMS hợp lệ, không flag
                         $publicResolved = @($resolved | Where-Object { $_ -notmatch "^127\.|^0\.0\.0\.|^::1$" })
                         if ($publicResolved.Count -gt 0) {
                             $result.System.IsFakeKMS = $false
                             $hasPublicDns = $true
+                        } elseif (-not $hasPublicDns) {
+                            # toàn localhost (không IP public) → fake
+                            foreach ($ip in $resolved) {
+                                if ($ip -match "^127\.|^0\.0\.0\.|^::1$") { $result.System.IsFakeKMS = $true; break }
+                            }
                         }
                     }
                 } catch {}
@@ -332,6 +341,15 @@ fn detect_kms38(xpr: &str, store_test_exists: bool, grace_period_remaining: u32,
 ///   - KHÔNG dùng `-match` substring for `"kms."` (trước đây bắt cả
 ///     `kms.digitalrivercontent.net` — domain hợp lệ của Microsoft).
 ///   - Nếu DNS resolves host về IP public → xem là KMS hợp lệ, KHÔNG flag.
+///
+/// ⚠️ DUAL-IMPLEMENTATION WARNING — giữ parity với PowerShell:
+/// Logic này SONG SONG với bản PowerShell `IsFakeKMS` trong
+/// `scan_windows_activation` (dòng ~209-255). HÀI nơi có cùng set
+/// distinctive patterns + 3 legit domains + nguyên tắc DNS-thắng-tên.
+/// Nếu sửa logic phát hiện ở đây phải SỬA ĐỒNG BỘ cả 2 nơi; chỉnh 1 nơi sẽ
+/// khiến Windows (PS) và Office (Rust) lệch nhau theo thời gian.
+/// Quy tắc được THỐNG NHẤT 2 nơi: chỉ cần resolve ra ít nhất 1 IP public là
+/// coi là hợp lệ (không fake), bất kể có lẫn localhost hay không ("DNS-thắng-tên").
 #[allow(dead_code)]
 fn detect_fake_kms(kms_host: &str, resolved_ips: &[String]) -> bool {
     let kms_host = kms_host.trim();
@@ -352,15 +370,18 @@ fn detect_fake_kms(kms_host: &str, resolved_ips: &[String]) -> bool {
         }
     }
 
-    // 2. Nếu DNS resolves ra IP public → KMS hợp lệ (không flag), cho dù tên có "kms."
+    // 2. Nếu DNS resolves ra ít nhất 1 IP public → KMS hợp lệ (không flag), cho
+    //    dù tên có "kms." và dù có LẪN localhost trong kết quả. Thống nhất với
+    //    PowerShell: ưu tiên tránh false positive ("DNS-thắng-tên"), chỉ báo fake
+    //    khi resolve KHÔNG có IP public nào.
+    let any_public = resolved_ips
+        .iter()
+        .any(|ip| !(ip.starts_with("127.") || ip == "0.0.0.0" || ip == "::1"));
+    if any_public {
+        return false;
+    }
+    // resolved không rỗng nhưng toàn localhost (không có IP public nào) → fake
     if !resolved_ips.is_empty() {
-        let all_public = resolved_ips
-            .iter()
-            .all(|ip| !(ip.starts_with("127.") || ip == "0.0.0.0" || ip == "::1"));
-        if all_public {
-            return false;
-        }
-        // có IP localhost trong DNS → fake
         return true;
     }
 
@@ -375,6 +396,95 @@ fn detect_fake_kms(kms_host: &str, resolved_ips: &[String]) -> bool {
     }
 
     false
+}
+
+/// Resolve KMS host → IP addresses for fake-KMS verification. Uses std
+/// (`ToSocketAddrs`) — no extra dependency. Returns empty vec when the host is
+/// empty/"N/A" or could not be resolved within the timeout (caller treats empty
+/// as "no DNS evidence").
+///
+/// TIMEOUT NOTE: `ToSocketAddrs` is a synchronous, non-cancellable system call
+/// and its duration is controlled by the OS resolver, which can stall when the
+/// host is alive-but-dead or DNS is slow. To avoid blocking the Office scan on
+/// a hung/unresponsive KMS host (mirroring the short-timeout treatment used for
+/// `fetch_public_ip` in the Network tab), the resolution is run on a detached
+/// worker thread and we only wait up to `RESOLVE_TIMEOUT`. On timeout the result
+/// is treated as "no DNS evidence" (empty), never as "fake".
+const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
+fn resolve_kms_ips(host: &str) -> Vec<String> {
+    let host = host.trim().to_string();
+    if host.is_empty() || host == "N/A" {
+        return Vec::new();
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut ips = Vec::new();
+        if let Ok(iter) = (host.as_str(), 0).to_socket_addrs() {
+            for addr in iter {
+                ips.push(addr.ip().to_string());
+            }
+        }
+        let _ = tx.send(ips);
+    });
+    rx.recv_timeout(RESOLVE_TIMEOUT).unwrap_or_default()
+}
+
+/// Phần 2 — Xác minh KMS host giả cho Office. TÁI DÙNG `detect_fake_kms` (Rust thuần,
+/// logic DNS-thắng-tên đã siết ở đợt sửa Windows), KHÔNG viết lại logic phát hiện.
+/// Đọc `report.licData.kmsHost` từ report đã parse, gọi `detect_fake_kms(host, resolved_ips)`.
+/// Nếu nghi giả → đánh dấu vào report user-facing: kmsHostInfo.isFakeKMS/hostType,
+/// rẻ confidence, hạ provenanceLevel, thêm bằng chứng, báo recommendation.
+fn apply_fake_office_kms_flag(parsed: &mut serde_json::Value, resolved_ips: &[String]) {
+    let host = parsed
+        .get("report")
+        .and_then(|r| r.get("licData"))
+        .and_then(|l| l.get("kmsHost"))
+        .and_then(|h| h.as_str())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if host.is_empty() || host == "N/A" {
+        return;
+    }
+    if !detect_fake_kms(&host, resolved_ips) {
+        return;
+    }
+
+    let report = match parsed.get_mut("report") {
+        Some(r) => r,
+        None => return,
+    };
+    report["isFakeKMS"] = serde_json::json!(true);
+
+    if let Some(prov) = report.get_mut("provenance") {
+        if let Some(khi) = prov.get_mut("kmsHostInfo") {
+            khi["isFakeKMS"] = serde_json::json!(true);
+            khi["hostType"] =
+                serde_json::json!("Suspicious / Pirated KMS Host (fake KMS)");
+            khi["reachability"] = serde_json::json!("SUSPICIOUS");
+        }
+        // Rẻ confidence xuống tối đa 35 khi nghi ngờ máy chủ giả.
+        let base = prov
+            .get("confidence")
+            .and_then(|c| c.as_i64())
+            .unwrap_or(50);
+        prov["confidence"] = serde_json::json!(base.min(35));
+        prov["provenanceLevel"] = serde_json::json!("LEVEL_4_INSUFFICIENT_EVIDENCE");
+        prov["provenanceLevelText"] = serde_json::json!(
+            "KHÔNG ĐỦ BẰNG CHỨNG — NGHI KMS HOST GIẢ (INSUFFICIENT EVIDENCE)"
+        );
+        prov["recommendation"] = serde_json::json!(format!(
+            "Phát hiện KMS Host có dấu hiệu giả mạo ('{host}'). Vui lòng xác minh nguồn kích hoạt Office."
+        ));
+        prov["isGenuine"] = serde_json::json!(false);
+        if let Some(ev) = prov.get_mut("evidenceUsed") {
+            if let Some(arr) = ev.as_array_mut() {
+                arr.push(serde_json::json!(format!(
+                    "KMS Host giả mạo khả nghi: '{host}' (không phân giải tới máy chủ license công khai hợp lệ)."
+                )));
+            }
+        }
+    }
 }
 
 /// Lightweight Office summary for scan_activation (Dstatus, Products, OhookFiles) — parity Electron
@@ -411,6 +521,32 @@ pub fn scan_office_activation_summary() -> Result<serde_json::Value, String> {
         }
     }
 
+    # Ohook Detection: check for sppcs.dll (the file MAS Ohook replaces with an
+    # unsigned hook DLL). Office C2R Volume ships sppcs.dll as a symlink pointing
+    # to MS-signed sppc.dll, which is legit — so we skip symlinks/reparse points
+    # resolving to a valid Microsoft-signed target, and skip MS-signed files.
+    # (`sppc.dll` itself is a real Windows/forwarder file, NOT an Ohook indicator,
+    #  so it is no longer collected here — that was the main false positive.)
+    function Test-LegitOfficeSppc([string]$path) {
+        try {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            $isReparse = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+            if ($isReparse -and $item.LinkType -eq "SymbolicLink" -and $item.Target) {
+                if (Test-Path -LiteralPath $item.Target) {
+                    $tSig = Get-AuthenticodeSignature -LiteralPath $item.Target -ErrorAction SilentlyContinue
+                    if ($tSig.Status -eq "Valid" -and $tSig.SignerCertificate.Subject -match "Microsoft Corporation") {
+                        return $true
+                    }
+                }
+            }
+            $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue
+            if ($sig.Status -eq "Valid" -and $sig.SignerCertificate.Subject -match "Microsoft Corporation") {
+                return $true
+            }
+        } catch {}
+        return $false
+    }
+
     $ohookSearchPaths = @(
         "$env:ProgramFiles\Microsoft Office",
         "$env:SystemDrive\Program Files (x86)\Microsoft Office",
@@ -420,9 +556,9 @@ pub fn scan_office_activation_summary() -> Result<serde_json::Value, String> {
     foreach ($searchBase in $ohookSearchPaths) {
         if (Test-Path $searchBase) {
             $found = Get-ChildItem -Path $searchBase -Recurse -Filter "sppcs.dll" -ErrorAction SilentlyContinue
-            foreach ($f in $found) { $office.OhookFiles += $f.FullName }
-            $sppcFound = Get-ChildItem -Path $searchBase -Recurse -Filter "sppc.dll" -ErrorAction SilentlyContinue
-            foreach ($f in $sppcFound) { $office.OhookFiles += $f.FullName }
+            foreach ($f in $found) {
+                if (-not (Test-LegitOfficeSppc $f.FullName)) { $office.OhookFiles += $f.FullName }
+            }
         }
     }
 
@@ -605,6 +741,31 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     $isAuthenticSppc = ($sysSppcAuthenticode -eq "Valid" -and $sysSppcSigner -match "Microsoft Corporation")
 
     # 4. COLLECTOR 3: OhookCollector (sppcs.dll in Office directories & VFS)
+    #    ANTI-FALSE-POSITIVE: Office C2R Volume legitimately ships sppcs.dll as a
+    #    symlink/reparse -> SysWOW64\System32\sppc.dll (MS-signed), plus forwarder
+    #    stubs. We only flag a file as "Ohook" when it has NO valid Microsoft
+    #    signature AND is NOT a symlink to an MS-signed target. MAS Ohook replaces
+    #    sppcs.dll with an unsigned hook DLL (not a symlink), so it is still caught.
+    function Test-LegitOfficeSppc([string]$path) {
+        try {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            $isReparse = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+            if ($isReparse -and $item.LinkType -eq "SymbolicLink" -and $item.Target) {
+                if (Test-Path -LiteralPath $item.Target) {
+                    $tSig = Get-AuthenticodeSignature -LiteralPath $item.Target -ErrorAction SilentlyContinue
+                    if ($tSig.Status -eq "Valid" -and $tSig.SignerCertificate.Subject -match "Microsoft Corporation") {
+                        return $true
+                    }
+                }
+            }
+            $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue
+            if ($sig.Status -eq "Valid" -and $sig.SignerCertificate.Subject -match "Microsoft Corporation") {
+                return $true
+            }
+        } catch {}
+        return $false
+    }
+
     $ohookDllFound = $false
     $ohookPathsFound = @()
     $ohookSearchBases = @(
@@ -618,8 +779,10 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
             try {
                 $found = Get-ChildItem -Path $base -Recurse -Filter "sppcs.dll" -ErrorAction SilentlyContinue
                 foreach ($f in $found) {
-                    $ohookDllFound = $true
-                    $ohookPathsFound += $f.FullName
+                    if (-not (Test-LegitOfficeSppc $f.FullName)) {
+                        $ohookDllFound = $true
+                        $ohookPathsFound += $f.FullName
+                    }
                 }
             } catch {}
         }
@@ -1014,7 +1177,7 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
     "#;
     let stdout = run_ps(ps);
     let json_str = exec::extract_json(&stdout);
-    let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap_or_else(|e| {
+    let mut parsed: serde_json::Value = serde_json::from_str(json_str).unwrap_or_else(|e| {
         log::error!("Failed to parse Office Diagnostic V3 JSON: {} | Raw: {}", e, stdout);
         serde_json::json!({
             "success": false,
@@ -1022,6 +1185,20 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
             "error": format!("Failed to parse Office Diagnostic V3 report: {}", e)
         })
     });
+    // Phần 2: Xác minh KMS host giả cho Office — tái dùng `detect_fake_kms` (Rust thuần).
+    if parsed["success"].as_bool().unwrap_or(false) {
+        let host = parsed
+            .get("report")
+            .and_then(|r| r.get("licData"))
+            .and_then(|l| l.get("kmsHost"))
+            .and_then(|h| h.as_str())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if !host.is_empty() && host != "N/A" {
+            let resolved_ips = resolve_kms_ips(&host);
+            apply_fake_office_kms_flag(&mut parsed, &resolved_ips);
+        }
+    }
     Ok(parsed)
 }
 
@@ -1708,6 +1885,109 @@ mod tests {
         assert!(!detect_fake_kms("kms.contoso-public.aws", &["52.10.1.1".to_string()]));
         // Host bắt đầu bằng "kms." + KHÔNG có DNS, không phải legit domain → vẫn flag (thận trọng)
         assert!(detect_fake_kms("kms.10banh.local", &[]));
+    }
+
+    #[test]
+    fn fakekms_mixed_public_and_localhost_is_legit() {
+        // Regression: host resolve ra HỖN HỢP (vừa IP public vừa localhost).
+        // Thống nhất cả PowerShell lẫn Rust: chỉ cần CÓ ít nhất 1 IP public là
+        // coi là hợp lệ (không flag), bất kể có lẫn localhost → tránh false
+        // positive ("DNS-thắng-tên"). Trước đây bản Rust flag trường hợp này.
+        assert!(!detect_fake_kms("kms.corp.example.com", &["8.8.8.8".to_string(), "127.0.0.1".to_string()]));
+        // ngược lại: KHÔNG có IP public nào (toàn localhost) vẫn bị flag
+        assert!(detect_fake_kms("kms.corp.example.com", &["127.0.0.1".to_string(), "0.0.0.0".to_string()]));
+    }
+
+    // PART 2b — Office report fake-KMS flag (reuses detect_fake_kms)
+
+
+    fn fake_office_report(host: &str) -> serde_json::Value {
+        serde_json::json!({
+            "success": true,
+            "isInstalled": true,
+            "report": {
+                "licData": { "kmsHost": host },
+                "provenance": {
+                    "confidence": 50,
+                    "provenanceLevel": "LEVEL_3_SOURCE_REQUIRES_VERIFICATION",
+                    "recommendation": "x",
+                    "isGenuine": false,
+                    "evidenceUsed": ["e1"],
+                    "kmsHostInfo": {
+                        "host": host,
+                        "hostType": "Unknown Host",
+                        "reachability": "YES",
+                        "port": 1688
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn office_fake_kms_report_is_flagged() {
+        // KMS host giả (pattern rõ ràng + DNS về localhost) -> report phải bị đánh dấu.
+        let mut rep = fake_office_report("kmsauto.example");
+        let ips = vec!["127.0.0.1".to_string()];
+        apply_fake_office_kms_flag(&mut rep, &ips);
+        assert_eq!(rep["report"]["isFakeKMS"], serde_json::json!(true));
+        assert_eq!(rep["report"]["provenance"]["kmsHostInfo"]["isFakeKMS"], serde_json::json!(true));
+        assert_eq!(rep["report"]["provenance"]["confidence"].as_i64(), Some(35));
+        assert_eq!(
+            rep["report"]["provenance"]["provenanceLevel"],
+            serde_json::json!("LEVEL_4_INSUFFICIENT_EVIDENCE")
+        );
+        assert_eq!(rep["report"]["provenance"]["isGenuine"], serde_json::json!(false));
+        assert!(rep["report"]["provenance"]["evidenceUsed"].as_array().unwrap().len() >= 2);
+    }
+
+    #[test]
+    fn office_fake_kms_flags_unresolved_kms_prefix_host() {
+        // Host "kms.<non-legit>" không resolve DNS -> detect_fake_kms flag (thận trọng),
+        // và bước apply Office phải gắn cờ tương ứng.
+        let mut rep = fake_office_report("kms.10banh.local");
+        apply_fake_office_kms_flag(&mut rep, &[]);
+        assert_eq!(rep["report"]["isFakeKMS"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn office_legit_microsoft_kms_not_flagged() {
+        // kms.digitalrivercontent.net + DNS public -> KHÔNG bị cờ (logic DNS-thắng-tên).
+        let mut rep = fake_office_report("kms.digitalrivercontent.net");
+        let ips = vec!["40.86.55.83".to_string()];
+        apply_fake_office_kms_flag(&mut rep, &ips);
+        assert_ne!(rep["report"]["isFakeKMS"], serde_json::json!(true));
+        // confidence giữ nguyên 50 (không bị rẻ).
+        assert_eq!(rep["report"]["provenance"]["confidence"].as_i64(), Some(50));
+    }
+
+    #[test]
+    fn office_legit_company_domain_with_public_dns_not_flagged() {
+        // Domain công ty thật resolve ra IP public (không localhost) -> KHÔNG flag.
+        let mut rep = fake_office_report("kms.corp.example.com");
+        let ips = vec!["8.8.8.8".to_string()];
+        apply_fake_office_kms_flag(&mut rep, &ips);
+        assert_ne!(rep["report"]["isFakeKMS"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn office_mixed_public_and_localhost_not_flagged() {
+        // Hỗn hợp public+localhost, thống nhất cả PS lẫn Rust: có ≥1 IP public
+        // là hợp lệ → Office KHÔNG bị gắn cờ, confidence giữ nguyên.
+        let mut rep = fake_office_report("kms.corp.example.com");
+        let ips = vec!["8.8.8.8".to_string(), "127.0.0.1".to_string()];
+        apply_fake_office_kms_flag(&mut rep, &ips);
+        assert_ne!(rep["report"]["isFakeKMS"], serde_json::json!(true));
+        assert_eq!(rep["report"]["provenance"]["confidence"].as_i64(), Some(50));
+    }
+
+    #[test]
+    fn office_na_or_empty_host_never_flagged() {
+        // Không có KMS host (N/A) -> không đánh dấu (trạng thái UNLICENSED hợp lệ giữ nguyên).
+        let mut rep = fake_office_report("N/A");
+        apply_fake_office_kms_flag(&mut rep, &["127.0.0.1".to_string()]);
+        assert_ne!(rep["report"]["isFakeKMS"], serde_json::json!(true));
+        assert_eq!(rep["report"]["provenance"]["confidence"].as_i64(), Some(50));
     }
 }
 
