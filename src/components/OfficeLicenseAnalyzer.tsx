@@ -69,6 +69,8 @@ export default function OfficeLicenseAnalyzer() {
         const offMethod = reportData?.provenance?.activationMethod || 'KMS Client (GVLK)';
         const offStr = offStatus === 'LICENSED'
           ? `✔ ${offName}: Máy sạch - Đã kích hoạt (${offMethod} - Cần hóa đơn/chứng từ doanh nghiệp nếu muốn đối soát)`
+          : offStatus === 'NOTIFICATION'
+          ? `⚠ ${offName}: Office có giấy phép nhưng đã hết hạn Grace - Đang ở chế độ thông báo (${offMethod})`
           : `❌ ${offName}: Chưa kích hoạt`;
         updateSessionReport({ officeActivation: offStr });
       } else {
@@ -106,6 +108,42 @@ export default function OfficeLicenseAnalyzer() {
   const systemConfidence = report?.confidenceResult?.confidencePercentage || 0;
   const targetActionsCount = report?.surgicalPlan?.targetActions?.length || 0;
   const isKmsMethod = report?.provenance?.activationMethod?.includes('KMS');
+
+  const activationStatus = report?.provenance?.activationStatus || report?.licData?.licenseStatus || 'N/A';
+  const isNotificationGraceExpiredMak = Boolean(
+    report &&
+    (activationStatus === 'NOTIFICATION' || report?.licData?.licenseStatus === 'NOTIFICATION') &&
+    (
+      report?.provenance?.activationMethod?.includes('MAK') ||
+      report?.provenance?.activationMethod?.includes('Grace Expired') ||
+      report?.licData?.licenseName?.includes('MAK') ||
+      report?.licData?.activationType === 'MAK' ||
+      report?.licData?.productKeyChannel === 'MAK'
+    ) &&
+    (!report?.provenance?.kmsHostInfo?.host || report?.provenance?.kmsHostInfo?.host === 'N/A' || report?.provenance?.kmsHostInfo?.host === 'Không đọc được dữ liệu')
+  );
+
+  const getStatusBadgeClass = (status: string | undefined) => {
+    const s = (status || '').toUpperCase();
+    if (s === 'LICENSED') {
+      return 'text-emerald-400 font-bold px-1.5 py-0.5 bg-emerald-500/10 rounded border border-emerald-500/30';
+    }
+    if (s === 'NOTIFICATION' || s.includes('GRACE')) {
+      return 'text-amber-400 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded border border-amber-500/30';
+    }
+    if (s === 'UNLICENSED') {
+      return 'text-rose-400 font-bold px-1.5 py-0.5 bg-rose-500/10 rounded border border-rose-500/30';
+    }
+    return 'text-slate-300 font-bold px-1.5 py-0.5 bg-slate-800 rounded border border-slate-700';
+  };
+
+  const getStatusTextClass = (status: string | undefined) => {
+    const s = (status || '').toUpperCase();
+    if (s === 'LICENSED') return 'text-emerald-400';
+    if (s === 'NOTIFICATION' || s.includes('GRACE')) return 'text-amber-400';
+    if (s === 'UNLICENSED') return 'text-rose-400';
+    return 'text-slate-300';
+  };
 
   // Multi-format Report Exporter
   const generateReportText = () => {
@@ -227,27 +265,91 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
 
         {/* SUMMARY BAR */}
         {report && (
-          <div className="bg-[#090e1a] text-slate-300 px-3.5 py-2.5 rounded-xl border border-slate-800 text-xs font-mono flex flex-wrap items-center justify-between gap-2 shadow-inner">
-            <div className="flex flex-wrap items-center gap-3">
-              <span>① Trạng thái: <strong className="text-emerald-400 font-bold px-1.5 py-0.5 bg-emerald-500/10 rounded border border-emerald-500/30">{report.provenance?.activationStatus || 'N/A'}</strong></span>
-              <span className="text-slate-700">|</span>
-              <span>② Khôi phục: <strong className={targetActionsCount > 0 ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold px-1.5 py-0.5 bg-emerald-500/10 rounded border border-emerald-500/30'}>{targetActionsCount > 0 ? 'Cần thực hiện' : 'Không cần thiết'}</strong></span>
-              <span className="text-slate-700">|</span>
-              <span>③ Phương thức: <strong className="text-cyan-300 font-bold">{report.provenance?.activationMethod || 'N/A'}</strong> {renderTooltipIcon('KMS')}</span>
+          <div className="space-y-2.5">
+            <div className="bg-[#090e1a] text-slate-300 px-3.5 py-2.5 rounded-xl border border-slate-800 text-xs font-mono flex flex-wrap items-center justify-between gap-2 shadow-inner">
+              <div className="flex flex-wrap items-center gap-3">
+                <span>① Trạng thái: <strong className={getStatusBadgeClass(report.provenance?.activationStatus)}>{report.provenance?.activationStatus || 'N/A'}</strong></span>
+                <span className="text-slate-700">|</span>
+                <span>② {isNotificationGraceExpiredMak ? 'Hành động:' : 'Khôi phục:'} <strong className={isNotificationGraceExpiredMak ? 'text-amber-400 font-bold px-1.5 py-0.5 bg-amber-500/10 rounded border border-amber-500/30' : (targetActionsCount > 0 ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold px-1.5 py-0.5 bg-emerald-500/10 rounded border border-emerald-500/30')}>{isNotificationGraceExpiredMak ? 'Cần xác minh với nhà cung cấp' : (targetActionsCount > 0 ? 'Cần thực hiện' : 'Không cần thiết')}</strong></span>
+                <span className="text-slate-700">|</span>
+                <span>③ Phương thức: <strong className="text-cyan-300 font-bold">{report.provenance?.activationMethod || 'N/A'}</strong> {renderTooltipIcon('KMS')}</span>
+              </div>
+              <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                Độ tin cậy hệ thống: <strong className="text-emerald-400 font-bold">{systemConfidence}%</strong>
+                <button 
+                  onClick={() => setShowConfidenceBreakdown(true)}
+                  className="p-0.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 rounded transition-colors cursor-pointer"
+                  title="Bấm để xem chi tiết điểm số tin cậy"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              Độ tin cậy hệ thống: <strong className="text-emerald-400 font-bold">{systemConfidence}%</strong>
-              <button 
-                onClick={() => setShowConfidenceBreakdown(true)}
-                className="p-0.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 rounded transition-colors cursor-pointer"
-                title="Bấm để xem chi tiết điểm số tin cậy"
-              >
-                <Info className="w-3.5 h-3.5" />
-              </button>
-            </div>
+
+            {/* GIẢI THÍCH CHI TIẾT NGAY DƯỚI BADGE KHI NOTIFICATION + MAK/GRACE EXPIRED */}
+            {isNotificationGraceExpiredMak && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300 leading-relaxed font-sans flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <div className="font-semibold text-amber-200">
+                    Word có thể vẫn hiển thị &quot;Activated&quot; do dữ liệu lưu tạm (cache) — trạng thái cấp phép thực tế (SPP) hiện chưa xác nhận genuine.
+                  </div>
+                  <p className="text-[11px] text-amber-300/85">
+                    Đây không phải lỗi phần mềm; license cần được xác minh lại với nhà cung cấp (kiểm tra lại key với IT/nơi mua Office).
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* KHỐI ĐỐI CHIẾU SONG SONG 2 NGUỒN TRẠNG THÁI (CHỈ ÁP DỤNG CHO NOTIFICATION + MAK/GRACE EXPIRED) */}
+      {report && isNotificationGraceExpiredMak && (
+        <div className="bg-[#131d33] p-4 rounded-xl border border-amber-500/30 shadow-md space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              ĐỐI CHIẾU SONG SONG 2 NGUỒN DỮ LIỆU CẤP PHÉP OFFICE
+            </div>
+            <span className="text-[10px] text-slate-400 font-mono">Đa nguồn độc lập • Tránh hiểu nhầm mâu thuẫn</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Nguồn 1: Word UI Cache */}
+            <div className="p-3.5 bg-[#090e1a] rounded-xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-300 uppercase">Trạng thái Word hiển thị</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                  Activated
+                </span>
+              </div>
+              <div className="text-xs font-semibold text-slate-200">
+                Nguồn: Giao diện Word (Account / Thông tin phần mềm)
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Ứng dụng Office (Word/Excel) hiển thị trạng thái theo bộ nhớ đệm (cache) lưu tạm cục bộ. Cache giao diện này chưa được cập nhật khi giấy phép nền đã chuyển sang chế độ hết hạn.
+              </p>
+            </div>
+
+            {/* Nguồn 2: SPP Service */}
+            <div className="p-3.5 bg-[#090e1a] rounded-xl border border-amber-500/30 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-amber-300 uppercase">Trạng thái SPP thực tế</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                  Notification / Grace Expired
+                </span>
+              </div>
+              <div className="text-xs font-semibold text-amber-200">
+                Nguồn: Dịch vụ bảo vệ bản quyền hệ thống SPP (ospp.vbs / WMI)
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Dịch vụ cấp phép lõi của hệ điều hành ghi nhận giấy phép MAK đã hết hạn thời gian gia hạn (LicenseStatus = 5). Office đang chạy ở chế độ thông báo nag-screen và cần kiểm tra lại bản quyền.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* CONFIDENCE BREAKDOWN MODAL */}
       {showConfidenceBreakdown && report && (
@@ -334,18 +436,34 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
           {/* Ô 3: ④ Kết Luận với GIẢI THÍCH LÝ DO */}
           <div className="bg-[#131d33] p-4 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between space-y-1.5">
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">④ Kết Luận</div>
-            <div className="text-xs font-bold text-emerald-400 leading-tight flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>{report.decisionResult?.reason || '✓ Không phát hiện can thiệp.'}</span>
+            <div className={`text-xs font-bold leading-tight flex items-center gap-1.5 ${isNotificationGraceExpiredMak ? 'text-amber-400' : 'text-emerald-400'}`}>
+              {isNotificationGraceExpiredMak ? (
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              )}
+              <span>
+                {isNotificationGraceExpiredMak
+                  ? 'Cần xác minh bản quyền (Chế độ Notification)'
+                  : (report.decisionResult?.reason || '✓ Không phát hiện can thiệp.')}
+              </span>
             </div>
             
             {/* EXPLAINABILITY CHECKLIST */}
             {report.decisionResult?.explanationList && (
               <div className="mt-1 pt-1.5 border-t border-slate-800 text-[10px] text-slate-400 space-y-0.5 font-sans">
                 <strong className="text-slate-300 block font-bold text-[9px] uppercase">Vì sao Engine kết luận:</strong>
-                {report.decisionResult.explanationList.slice(0, 3).map((exp: string, idx: number) => (
-                  <div key={idx} className="text-slate-300 truncate">• {exp}</div>
-                ))}
+                {isNotificationGraceExpiredMak ? (
+                  <>
+                    <div className="text-amber-300 truncate">• Trạng thái SPP: Notification (Grace Period đã hết)</div>
+                    <div className="text-slate-300 truncate">• Hệ thống sạch, không phát hiện công cụ can thiệp</div>
+                    <div className="text-slate-300 truncate">• Kênh: {report.provenance?.activationMethod}</div>
+                  </>
+                ) : (
+                  report.decisionResult.explanationList.slice(0, 3).map((exp: string, idx: number) => (
+                    <div key={idx} className="text-slate-300 truncate">• {exp}</div>
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -365,7 +483,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
                 disabled={isScanning}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/20 transition-all cursor-pointer disabled:opacity-50"
               >
-                <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
                 {isScanning ? 'Đang quét...' : 'Quét lại'}
               </button>
               <span className="text-xs font-bold font-mono text-cyan-400 flex items-center">
@@ -391,7 +509,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
               <span>➔</span>
               <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-emerald-300 font-semibold">Tổng hợp dữ liệu</span>
               <span>➔</span>
-              <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-amber-300 font-semibold">Mức độ tin cậy ({systemConfidence}%)</span>
+              <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-amber-300 font-semibold">Mức độ tin cậy ({systemConfidence}% )</span>
               <span>➔</span>
               <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-purple-300 font-semibold">Chẩn đoán hệ thống</span>
               <span>➔</span>
@@ -400,7 +518,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
 
             <div className="text-xs text-slate-300 space-y-2 font-sans leading-relaxed">
               <p className="text-xs">
-                Trạng thái ghi nhận: <strong className="text-emerald-400 font-bold">{report.provenance.activationStatus}</strong> ({report.provenance.activationMethod}). Hệ thống không phát hiện các công cụ can thiệp hoặc tệp tin bị thay đổi. Khi cần đối soát bản quyền, bạn có thể lưu giữ các chứng từ sau:
+                Trạng thái ghi nhận: <strong className={`${getStatusTextClass(report.provenance.activationStatus)} font-bold`}>{report.provenance.activationStatus}</strong> ({report.provenance.activationMethod}). Hệ thống không phát hiện các công cụ can thiệp hoặc tệp tin bị thay đổi. Khi cần đối soát bản quyền, bạn có thể lưu giữ các chứng từ sau:
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-400 pt-2 border-t border-slate-800 font-mono">
                 <div>• Hóa đơn mua máy hoặc chứng nhận bản quyền.</div>
@@ -422,7 +540,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
             <div className="bg-[#0e1626] p-3 rounded-xl border border-slate-800">
               <span className="text-[10px] font-bold text-slate-500 block uppercase">Trạng Thái</span>
-              <span className="font-bold text-emerald-400 text-sm mt-0.5 block">{report.provenance.activationStatus}</span>
+              <span className={`font-bold text-sm mt-0.5 block ${getStatusTextClass(report.provenance.activationStatus)}`}>{report.provenance.activationStatus}</span>
             </div>
 
             <div className="bg-[#0e1626] p-3 rounded-xl border border-slate-800">
@@ -467,6 +585,11 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
                     <div>⚠️ Phát hiện vấn đề cần khôi phục. Xem chi tiết tại "Kế Hoạch Khôi Phục".</div>
                     <div>Sao lưu dữ liệu quan trọng trước khi thực hiện khôi phục.</div>
                   </>
+                ) : isNotificationGraceExpiredMak ? (
+                  <>
+                    <div>⚠️ Trạng thái bản quyền: <strong className="text-amber-300">Cần xác minh với nhà cung cấp</strong> (Office ở chế độ Notification / Grace Expired với giấy phép MAK).</div>
+                    <div>💡 Các bước đề xuất: Liên hệ bộ phận IT công ty hoặc nhà cung cấp bản quyền để kiểm tra lại Product Key MAK hoặc cấp key mới. Tệp hệ thống hoàn toàn nguyên bản, không cần chạy thao tác khôi phục file.</div>
+                  </>
                 ) : (
                   <>
                     <div>✓ Không cần khôi phục vì: <strong>{report.decisionResult?.reason || 'Hệ thống sạch, không phát hiện dấu hiệu can thiệp.'}</strong></div>
@@ -504,7 +627,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
             {isRestoring 
               ? 'ĐANG KHÔI PHỤC...' 
               : targetActionsCount === 0 
-                ? 'Hệ thống sạch - Không cần thao tác' 
+                ? (isNotificationGraceExpiredMak ? 'Hệ thống sạch - Cần xác minh key' : 'Hệ thống sạch - Không cần thao tác') 
                 : 'KHÔI PHỤC AN TOÀN'}
           </button>
         </div>
