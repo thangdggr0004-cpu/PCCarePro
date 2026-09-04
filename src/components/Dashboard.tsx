@@ -844,15 +844,12 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
           })}
         </div>
 
-        {/* ── Favorite Quick Tools Bar (100% Thực Thi Thật) ── */}
+        {/* ── Favorite Quick Tools Bar ── */}
         <div className="p-4 bg-[#11192e] rounded-2xl border border-slate-800/80 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-slate-200 tracking-wide">
                 Lệnh &amp; Công Cụ Nhanh (1-Click)
-              </span>
-              <span className="text-[10px] font-mono text-emerald-400 font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                Thực thi thật
               </span>
             </div>
 
@@ -1191,17 +1188,15 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
               <button
                 onClick={async () => {
                   try {
-                    const { check } = await import('@tauri-apps/plugin-updater');
-                    const update = await check();
-                    console.log('[UPDATE] check() result:', JSON.stringify(update));
-                    if (!update) {
+                    const res: any = await (window as any).electronAPI?.checkForUpdates?.();
+                    if (!res?.hasUpdate) {
                       const { message } = await import('@tauri-apps/plugin-dialog');
                       await message(`Bạn đang ở phiên bản mới nhất (v${packageJson.version}). Không có bản cập nhật nào mới hơn trên GitHub.`, {
                         title: 'Thông Tin Cập Nhật',
                       });
                     } else {
                       const { message } = await import('@tauri-apps/plugin-dialog');
-                      await message(`Có bản mới: v${update.version}\n${update.body || ''}`, {
+                      await message(`Có bản mới: v${res.version}\nHãy bấm "Tải & Cập Nhật" ở góc phải dưới để cập nhật.`, {
                         title: 'Có Bản Cập Nhật',
                       });
                     }

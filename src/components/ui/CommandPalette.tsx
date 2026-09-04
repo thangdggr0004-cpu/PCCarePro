@@ -190,7 +190,7 @@ export default function CommandPalette({
       action: () => onNavigate('ktv-report'),
     },
 
-    // ── 2. Lệnh Nhanh & Tối Ưu Hệ Thống (Thực thi thật) ───
+    // ── 2. Lệnh Nhanh & Tối Ưu Hệ Thống ───
     {
       id: 'action-flush-dns',
       name: 'Làm sạch DNS Cache (Flush DNS)',
