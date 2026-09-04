@@ -826,3 +826,74 @@ pub fn read_tamper_protection() -> Result<serde_json::Value, String> {
     let val: serde_json::Value = serde_json::from_str(exec::extract_json(&stdout)).map_err(|e| format!("Parse error: {}", e))?;
     Ok(serde_json::json!({ "success": true, "data": val }))
 }
+
+/// Read system time, timezone and NTP status
+pub fn get_time_info() -> Result<serde_json::Value, String> {
+    let ps = r#"
+    try {
+        $tz = (Get-TimeZone).Id
+        $tzName = (Get-TimeZone).DisplayName
+        $now = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $svc = (Get-Service -Name w32time -ErrorAction SilentlyContinue).Status
+        $ntp = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters' -Name 'NtpServer' -ErrorAction SilentlyContinue).NtpServer
+        @{
+            success = $true
+            currentTime = $now
+            timeZoneId = "$tz"
+            timeZoneName = "$tzName"
+            isVietnam = ($tz -eq 'SE Asia Standard Time')
+            serviceStatus = if ($svc) { "$svc" } else { "Unknown" }
+            ntpServer = if ($ntp) { "$ntp" } else { "time.windows.com" }
+        } | ConvertTo-Json
+    } catch {
+        @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
+    }
+    "#;
+    let stdout = run_ps(ps);
+    let val: serde_json::Value = serde_json::from_str(exec::extract_json(&stdout)).map_err(|e| format!("Parse error: {}", e))?;
+    Ok(val)
+}
+
+/// 1-Click Vietnam Time Sync & Standardize
+pub fn sync_vietnam_time(ntp_server: Option<String>) -> Result<serde_json::Value, String> {
+    let chosen_ntp = match ntp_server.as_deref() {
+        Some("cloudflare") => "time.cloudflare.com,0x1 time.google.com,0x1 vn.pool.ntp.org,0x1",
+        Some("google") => "time.google.com,0x1 time.cloudflare.com,0x1 vn.pool.ntp.org,0x1",
+        Some("vn_pool") => "vn.pool.ntp.org,0x1 time.google.com,0x1 time.cloudflare.com,0x1",
+        _ => "time.google.com,0x1 time.cloudflare.com,0x1 vn.pool.ntp.org,0x1",
+    };
+
+    let ps = format!(r#"
+    try {{
+        tzutil /s "SE Asia Standard Time"
+        sc.exe config w32time start= auto | Out-Null
+        net start w32time 2>$null | Out-Null
+        w32tm /config /manualpeerlist:"{chosen_ntp}" /syncfromflags:manual /reliable:YES /update | Out-Null
+        Restart-Service -Name w32time -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 600
+        w32tm /resync /rediscover | Out-Null
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f | Out-Null
+
+        $tz = (Get-TimeZone).Id
+        $tzName = (Get-TimeZone).DisplayName
+        $now = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $svc = (Get-Service -Name w32time -ErrorAction SilentlyContinue).Status
+        @{{
+            success = $true
+            currentTime = $now
+            timeZoneId = "$tz"
+            timeZoneName = "$tzName"
+            isVietnam = ($tz -eq 'SE Asia Standard Time')
+            serviceStatus = "$svc"
+            message = "Đã chuẩn hóa múi giờ SE Asia Standard Time (UTC+07) và đồng bộ giờ thành công!"
+        }} | ConvertTo-Json
+    }} catch {{
+        @{{ success = $false; error = $_.Exception.Message }} | ConvertTo-Json
+    }}
+    "#);
+
+    let stdout = run_ps(&ps);
+    let val: serde_json::Value = serde_json::from_str(exec::extract_json(&stdout)).map_err(|e| format!("Parse error: {}", e))?;
+    Ok(val)
+}
+

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Zap, Battery, Play, Download, CheckCircle, Info, Activity, Settings, RefreshCw, AlertTriangle, Monitor, HardDrive, Cpu, Terminal, Wrench, X } from 'lucide-react';
+import { Shield, Zap, Battery, Play, Download, CheckCircle, Info, Activity, Settings, RefreshCw, AlertTriangle, Monitor, HardDrive, Cpu, Terminal, Wrench, X, Clock, Globe } from 'lucide-react';
 import ProgressBarComponent from './ProgressBarComponent.js';
 import { useTaskManager } from '../context/TaskManagerContext.js';
 import { updateSessionReport } from '../utils/SessionAuditStore.js';
@@ -206,10 +206,70 @@ export default function WindowsSettings() {
     disableOneDrive: false
   });
 
+  // Time Sync State (Cách 2: Dedicated Card)
+  interface TimeInfo {
+    currentTime: string;
+    timeZoneId: string;
+    timeZoneName: string;
+    isVietnam: boolean;
+    serviceStatus: string;
+    ntpServer: string;
+  }
+  const [timeInfo, setTimeInfo] = useState<TimeInfo | null>(null);
+  const [loadingTime, setLoadingTime] = useState(false);
+  const [syncingTime, setSyncingTime] = useState(false);
+  const [selectedNtp, setSelectedNtp] = useState<string>('google');
+  const [timeSyncResult, setTimeSyncResult] = useState<string | null>(null);
+
+  const loadTimeInfo = async () => {
+    setLoadingTime(true);
+    try {
+      const res = await (window as any).electronAPI?.getTimeInfo?.();
+      if (res && res.success) {
+        setTimeInfo(res);
+      }
+    } catch (e) {
+      console.error('Failed to load time info:', e);
+    } finally {
+      setLoadingTime(false);
+    }
+  };
+
+  const handleSyncVietnamTime = async () => {
+    setSyncingTime(true);
+    setTimeSyncResult(null);
+    try {
+      const res = await (window as any).electronAPI?.syncVietnamTime?.(selectedNtp);
+      if (res && res.success) {
+        setTimeInfo(prev => ({
+          currentTime: res.currentTime || prev?.currentTime || '',
+          timeZoneId: res.timeZoneId || 'SE Asia Standard Time',
+          timeZoneName: res.timeZoneName || '(UTC+07:00) Bangkok, Hanoi, Jakarta',
+          isVietnam: true,
+          serviceStatus: res.serviceStatus || 'Running',
+          ntpServer: selectedNtp === 'cloudflare' ? 'time.cloudflare.com' : selectedNtp === 'vn_pool' ? 'vn.pool.ntp.org' : 'time.google.com',
+        }));
+        setTimeSyncResult("Đã chuẩn hóa múi giờ Việt Nam (UTC+07) và đồng bộ thời gian thành công!");
+        appendWindowsHistory(['⏰ [Chuẩn Hóa Giờ VN] Đã đặt múi giờ SE Asia Standard Time (UTC+07) + Resync NTP']);
+        setSuccessNotice({
+          title: "Chuẩn Hóa Giờ Thành Công",
+          message: "Múi giờ đã đặt về UTC+07 (Bangkok, Hanoi, Jakarta) và đồng bộ máy chủ NTP.",
+          sectionName: "Giờ Hệ Thống"
+        });
+      } else {
+        setTimeSyncResult("Lỗi: " + (res?.error || "Không thể đồng bộ"));
+      }
+    } catch (e: any) {
+      setTimeSyncResult("Lỗi: " + e.message);
+    } finally {
+      setSyncingTime(false);
+    }
+  };
 
   useEffect(() => {
     loadSettings();
     loadTamperStatus();
+    loadTimeInfo();
   }, []);
 
   const loadTamperStatus = async () => {
@@ -247,12 +307,20 @@ export default function WindowsSettings() {
       if (res.success && res.data) {
         setState(prev => ({ ...prev, ...res.data }));
         
-        // Match active power plan
+        // Match active power plan across all 5 profiles
         if (res.data.activePowerPlan) {
           const guid = res.data.activePowerPlan.toLowerCase();
-          if (guid === '381b4222-f694-41f0-9685-ff5bb260df2e') setActiveMode(powerOptions.find(p => p.id === 'balanced') || powerOptions[0]);
-          else if (guid === '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c') setActiveMode(powerOptions.find(p => p.id === 'performance') || powerOptions[1]);
-          else if (guid === 'e9a42b02-d5df-448d-aa00-03f14749eb61') setActiveMode(powerOptions.find(p => p.id === 'ultimate') || powerOptions[2]);
+          if (guid === '381b4222-f694-41f0-9685-ff5bb260df2e') {
+            setActiveMode(powerOptions.find(p => p.id === 'balanced') || powerOptions[1]);
+          } else if (guid === '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c') {
+            setActiveMode(powerOptions.find(p => p.id === 'performance') || powerOptions[3]);
+          } else if (guid === 'e9a42b02-d5df-448d-aa00-03f14749eb61') {
+            setActiveMode(powerOptions.find(p => p.id === 'ultimate') || powerOptions[4]);
+          } else if (guid === 'a1841308-3541-4fab-bc81-f71556f20b4a' || guid === '961cc777-21a3-4279-8477-9a91373d0850') {
+            setActiveMode(powerOptions.find(p => p.id === 'battery') || powerOptions[0]);
+          } else if (guid === '2e2e98c4-30a1-4e5e-8dd5-8f5bf71f42f2' || guid.includes('8ca33a75')) {
+            setActiveMode(powerOptions.find(p => p.id === 'gaming') || powerOptions[2]);
+          }
         }
       }
     } catch (e) {
@@ -263,7 +331,7 @@ export default function WindowsSettings() {
   };
 
   const handleChange = (key: keyof typeof state, value: boolean) => {
-    if (key === 'defender' && value === false) {
+    if ((key === 'disableDefender' && value === true) || (key === 'defender' && value === false)) {
       let msg = "CẢNH BÁO: Tắt Windows Defender (DisableAntiSpyware) làm máy tính dễ bị rủi ro bảo mật.\n\nBạn có chắc chắn muốn tắt?";
       if (tamperEnabled) {
         msg = "⚠️ TAMPER PROTECTION ĐANG BẬT ⚠️\n\nWindows Defender Tamper Protection hiện đang kích hoạt. Tắt chống xâm nhập của Defender ngăn các thay đổi registry như thế này có hiệu lực.\n\nĐể tắt Defender thực sự, bạn CẦN vào: Cài đặt Windows → Quyền riêng tư & bảo mật → Bảo mật Windows → Bảo vệ chống virus & mối đe dọa → Quản lý bảo vệ → tắt Tamper Protection thủ công trước.\n\n" + (tamperManaged ? "Lưu ý: Tamper Protection đang được quản lý bởi tổ chức/GPO - có thể không tắt thủ công được.\n\n" : "") + "Bạn có chắc chắn vẫn muốn bật cài đặt này (không có hiệu lực khi Tamper Protection bật)?";
@@ -271,7 +339,11 @@ export default function WindowsSettings() {
       const confirm = window.confirm(msg);
       if (!confirm) return;
     }
-    setState(prev => ({ ...prev, [key]: value }));
+    setState(prev => ({
+      ...prev,
+      [key]: value,
+      ...(key === 'disableDefender' ? { defender: !value } : key === 'defender' ? { disableDefender: !value } : {})
+    }));
   };
 
   const { startTask, updateTask, completeTask, failTask, getTask } = useTaskManager();
@@ -287,11 +359,26 @@ export default function WindowsSettings() {
     setFixingAction(action);
 
     let p = 5;
+    let secondsElapsed = 0;
     const interval = setInterval(() => {
-      p += Math.floor(Math.random() * 6) + 2;
-      if (p > 95) p = 95;
-      updateTask(taskId, p, `Đang xử lý ${taskTitle} (${p}%)...`, `[*] Tiến trình ${taskTitle}: ${p}%`);
-    }, 1200);
+      secondsElapsed += 1;
+      if (action === 'sfc') {
+        const minutes = Math.floor(secondsElapsed / 60);
+        const seconds = secondsElapsed % 60;
+        const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+        const realisticP = Math.min(90, Math.floor(5 + (secondsElapsed / 600) * 85));
+        updateTask(
+          taskId,
+          realisticP,
+          `Đang quét & sửa chữa hệ thống (${timeStr})... Vui lòng không tắt máy`,
+          `[*] SFC & DISM đang chạy: ${timeStr} (Quá trình có thể kéo dài 5-15 phút)...`
+        );
+      } else {
+        p += Math.floor(Math.random() * 6) + 2;
+        if (p > 95) p = 95;
+        updateTask(taskId, p, `Đang xử lý ${taskTitle} (${p}%)...`, `[*] Tiến trình ${taskTitle}: ${p}%`);
+      }
+    }, 1000);
 
     try {
       let result: any = null;
@@ -506,6 +593,107 @@ export default function WindowsSettings() {
                 <span className="text-[11px] text-amber-400/80 text-center">Rebuild Icon/Thumbnail Cache bị trắng đen</span>
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* CARD: ĐỒNG BỘ & CHUẨN HÓA GIỜ VIỆT NAM (1-CLICK) - CÁCH 2 */}
+        <div className="bg-[#101728] rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+          <div className="bg-[#131d33] border-b border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+              <Clock className="w-4 h-4 text-cyan-400" />
+              Chuẩn Hóa &amp; Đồng Bộ Giờ Việt Nam (1-Click)
+            </h3>
+            <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 self-start sm:self-auto">
+              UTC+07:00 Bangkok, Hanoi, Jakarta
+            </span>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Box 1: Giờ hiện tại */}
+              <div className="p-3.5 bg-[#141e36] border border-slate-800 rounded-xl space-y-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Thời Gian Hệ Thống
+                </span>
+                <div className="text-sm md:text-base font-extrabold font-mono text-emerald-400 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{timeInfo?.currentTime || (loadingTime ? 'Đang đọc...' : 'Chưa tải')}</span>
+                </div>
+                <div className="text-[10px] text-slate-400 flex items-center gap-1.5">
+                  <span>Dịch vụ W32Time:</span>
+                  <b className={`font-mono font-bold ${timeInfo?.serviceStatus === 'Running' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {timeInfo?.serviceStatus || 'Unknown'}
+                  </b>
+                </div>
+              </div>
+
+              {/* Box 2: Múi giờ */}
+              <div className="p-3.5 bg-[#141e36] border border-slate-800 rounded-xl space-y-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Múi Giờ Hiện Tại
+                </span>
+                <div className="text-xs font-bold text-white truncate" title={timeInfo?.timeZoneName}>
+                  {timeInfo?.timeZoneName || timeInfo?.timeZoneId || 'Đang kiểm tra...'}
+                </div>
+                <div>
+                  {timeInfo?.isVietnam ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400">
+                      <CheckCircle className="w-3 h-3" /> Chuẩn múi giờ Việt Nam
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400">
+                      <AlertTriangle className="w-3 h-3" /> Đang bị lệch múi giờ
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Box 3: Chọn máy chủ NTP */}
+              <div className="p-3.5 bg-[#141e36] border border-slate-800 rounded-xl space-y-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Máy Chủ NTP Đồng Bộ
+                </span>
+                <select
+                  value={selectedNtp}
+                  onChange={(e) => setSelectedNtp(e.target.value)}
+                  className="w-full px-2.5 py-1.5 bg-[#0e1628] border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                >
+                  <option value="google">Google NTP (time.google.com) - Ổn định</option>
+                  <option value="cloudflare">Cloudflare NTP (time.cloudflare.com) - Tốc độ</option>
+                  <option value="vn_pool">Vietnam NTP Pool (vn.pool.ntp.org) - Nội địa</option>
+                </select>
+                <span className="text-[10px] text-slate-500 block truncate" title={timeInfo?.ntpServer}>
+                  Đang dùng: {timeInfo?.ntpServer || 'time.windows.com'}
+                </span>
+              </div>
+            </div>
+
+            {/* Action Bar & Feedback */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-800/80">
+              <p className="text-xs text-slate-400 leading-relaxed max-w-xl">
+                1-Click tự động đặt múi giờ <b>SE Asia Standard Time (UTC+07)</b>, bật service W32Time tự động, chống lệch giờ Dual-boot và cưỡng chế đồng bộ ngay lập tức.
+              </p>
+
+              <button
+                onClick={handleSyncVietnamTime}
+                disabled={syncingTime}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 hover:from-cyan-500 hover:to-emerald-500 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20 transition cursor-pointer disabled:opacity-50 shrink-0 active:scale-95"
+              >
+                <RefreshCw className={`w-4 h-4 text-slate-950 ${syncingTime ? 'animate-spin' : ''}`} />
+                <span>{syncingTime ? 'Đang Đồng Bộ Giờ...' : 'Chuẩn Hóa Giờ VN Ngay (1-Click)'}</span>
+              </button>
+            </div>
+
+            {timeSyncResult && (
+              <div className={`p-3 rounded-xl border text-xs flex items-center gap-2 animate-fade-in ${
+                timeSyncResult.startsWith('Lỗi')
+                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              }`}>
+                {timeSyncResult.startsWith('Lỗi') ? <AlertTriangle className="w-4 h-4 shrink-0" /> : <CheckCircle className="w-4 h-4 shrink-0" />}
+                <span>{timeSyncResult}</span>
+              </div>
+            )}
           </div>
         </div>
 

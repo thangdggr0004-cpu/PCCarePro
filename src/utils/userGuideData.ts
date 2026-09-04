@@ -94,6 +94,42 @@ export const USER_GUIDES: GuideItem[] = [
     ],
     keywords: ['update', 'cập nhật', 'windows update', '0x8007', 'treo update', 'lỗi cập nhật']
   },
+  {
+    id: 'win-sync-vietnam-time',
+    title: 'Chuẩn hóa giờ Việt Nam (UTC+07) & Sửa lỗi lệch giờ, lỗi SSL',
+    category: 'windows',
+    categoryName: 'Thiết Lập Windows',
+    targetSection: 'windows-settings',
+    summary: 'Đặt múi giờ SE Asia Standard Time (UTC+07:00 Bangkok, Hanoi, Jakarta), kích hoạt tự động dịch vụ W32Time và cưỡng chế đồng bộ qua máy chủ NTP Google/Cloudflare/Vietnam.',
+    whenToUse: 'Khi máy tính bị sai giờ, lệch múi giờ sau khi cài lại Windows, hết pin CMOS, hoặc chạy Dual-boot dẫn đến không vào được web (báo Your clock is ahead/behind, SSL Date Invalid).',
+    steps: [
+      {
+        step: 1,
+        title: 'Vào tab Thiết lập Windows',
+        description: 'Tìm đến khối "Chuẩn Hóa & Đồng Bộ Giờ Việt Nam (1-Click)".'
+      },
+      {
+        step: 2,
+        title: 'Chọn máy chủ NTP',
+        description: 'Mặc định dùng Google NTP (time.google.com) hoặc Cloudflare NTP để có tốc độ phản hồi nhanh nhất.'
+      },
+      {
+        step: 3,
+        title: 'Bấm "Chuẩn Hóa Giờ VN Ngay (1-Click)"',
+        description: 'Hệ thống sẽ cấu hình múi giờ SE Asia, kích hoạt w32time, cập nhật NTP và cưỡng chế đồng bộ ngay lập tức.'
+      },
+      {
+        step: 4,
+        title: 'Xác nhận kết quả',
+        description: 'Kiểm tra đồng hồ góc dưới màn hình Taskbar và badge hiển thị "Chuẩn múi giờ Việt Nam".'
+      }
+    ],
+    tips: [
+      'Đồng bộ giờ chuẩn là điều kiện tiên quyết để kích hoạt bản quyền số Windows/Office và mở các trang web ngân hàng, Zalo, Facebook.',
+      'Tính năng này tự động kích hoạt RealTimeIsUniversal để chống lệch 7 tiếng khi chạy song song Windows và cứu hộ WinPE/macOS/Linux.'
+    ],
+    keywords: ['giờ', 'múi giờ', 'lệch giờ', 'time', 'timezone', 'utc+7', 'vietnam time', 'w32time', 'ntp', 'ssl']
+  },
 
   // ── 2. TIỆN ÍCH OFFICE ───────────────────────────────
   {

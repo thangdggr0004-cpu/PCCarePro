@@ -6,7 +6,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { check as updaterCheck } from '@tauri-apps/plugin-updater';
 
 let appWindow: any = null;
 try {
@@ -118,6 +117,8 @@ export const tauriBridge = {
   resetWindowsUpdate: () => safeInvokeRaw('reset_windows_update'),
   rebuildIconCache: () => safeInvokeRaw('rebuild_icon_cache'),
   readTamperProtection: () => safeInvokeRaw('read_tamper_protection'),
+  getTimeInfo: () => safeInvokeRaw('get_time_info'),
+  syncVietnamTime: (ntpServer?: string) => safeInvokeRaw('sync_vietnam_time', { ntpServer }),
   applyPowerPlan: (options: { mode: string }) => safeInvokeRaw('apply_power_plan', { options }),
   backupRegistryKeys: () => safeInvokeRaw('backup_registry_keys'),
   applyWindowsSettings: (state: any) => safeInvokeRaw('apply_windows_settings', { state }),
@@ -136,7 +137,7 @@ export const tauriBridge = {
   removeReinstallPrinter: (printerName: string) => safeInvokeRaw('remove_reinstall_printer', { printerName }),
 
   // ── Office Standardizer ────────────────────
-  applyOfficeStandard: (options: { script: string }) => safeInvokeRaw('apply_office_standard', { options }),
+  applyOfficeStandard: (options: { script: string; elevated?: boolean }) => safeInvoke('apply_office_standard', { options }),
 
   // ── Window Controls ────────────────────────
   windowMinimize: async () => {
@@ -180,7 +181,7 @@ export const tauriBridge = {
   verifyCleanOperation: () => safeInvokeRaw('verify_clean_operation'),
   verifyBiosRestore: (scanResult?: any) => safeInvokeRaw('verify_bios_restore', { scanResult }),
 
-  // ── Auto Updater (tauri-plugin-updater) ──────
+  // ── Auto Updater (portable flow) ──────
   checkForUpdates: () => checkForUpdatesBridge(),
   downloadUpdate: () => downloadUpdateBridge(),
   installUpdate: () => installUpdateBridge(),
@@ -202,19 +203,18 @@ function emitUpdater(event: any) {
 
 async function checkForUpdatesBridge(): Promise<any> {
   try {
-    const update = await updaterCheck();
-    if (!update) {
-      return { ok: true, success: true, hasUpdate: false, message: 'Bạn đang sử dụng phiên bản mới nhất.' };
+    const res: any = await invoke('portable_update_check');
+    const hasUpdate = res?.hasUpdate === true;
+    if (hasUpdate) {
+      emitUpdater({
+        type: 'update-available',
+        info: {
+          latestVersion: res.version,
+          releaseNotes: res.notes || 'Đã có bản cập nhật mới trên GitHub.',
+        },
+      });
     }
-    emitUpdater({
-      type: 'update-available',
-      info: {
-        currentVersion: update.currentVersion || '?',
-        latestVersion: update.version,
-        releaseNotes: update.body || 'Đã có bản cập nhật mới trên GitHub.',
-      },
-    });
-    return { ok: true, success: true, hasUpdate: true, latestVersion: update.version };
+    return { ok: true, success: true, hasUpdate, version: res?.version };
   } catch (e: any) {
     console.warn('[TauriBridge] checkForUpdates:', e?.message || e);
     return { ok: false, success: false, error: String(e?.message || e) };
@@ -248,6 +248,7 @@ async function installUpdateBridge(): Promise<any> {
     await invoke('portable_update_apply');
     return { ok: true, success: true };
   } catch (e: any) {
+    emitUpdater({ type: 'error', error: String(e?.message || e) });
     return { ok: false, success: false, error: String(e?.message || e) };
   }
 }

@@ -591,6 +591,20 @@ async fn read_tamper_protection() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn get_time_info() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(windows_settings::get_time_info)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn sync_vietnam_time(ntp_server: Option<String>) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || windows_settings::sync_vietnam_time(ntp_server))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn apply_power_plan(options: serde_json::Value) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let mode = options["mode"].as_str().unwrap_or("balanced").to_string();
@@ -720,8 +734,7 @@ fn execute_printer_action(action: String, args: Option<serde_json::Value>) -> Re
 
 #[tauri::command]
 fn set_default_printer(printer_name: String) -> Result<serde_json::Value, String> {
-    printer::set_default_printer(&printer_name)?;
-    Ok(serde_json::json!({ "success": true }))
+    printer::set_default_printer(&printer_name)
 }
 
 #[tauri::command]
@@ -731,20 +744,17 @@ fn get_print_queue(printer_name: String) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn print_test_page(printer_name: String) -> Result<serde_json::Value, String> {
-    printer::print_test_page(&printer_name)?;
-    Ok(serde_json::json!({ "success": true }))
+    printer::print_test_page(&printer_name)
 }
 
 #[tauri::command]
 fn open_device_manager_printers() -> Result<serde_json::Value, String> {
-    printer::open_device_manager_printers()?;
-    Ok(serde_json::json!({ "success": true }))
+    printer::open_device_manager_printers()
 }
 
 #[tauri::command]
 fn remove_reinstall_printer(printer_name: String) -> Result<serde_json::Value, String> {
-    printer::remove_reinstall_printer(&printer_name)?;
-    Ok(serde_json::json!({ "success": true }))
+    printer::remove_reinstall_printer(&printer_name)
 }
 
 // ── Office Standardizer ───────────────────────
@@ -753,17 +763,63 @@ fn remove_reinstall_printer(printer_name: String) -> Result<serde_json::Value, S
 async fn apply_office_standard(options: serde_json::Value) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         if let Some(script) = options["script"].as_str() {
-            let stdout = exec::run_ps(script);
-            return Ok(serde_json::json!({ "success": true, "output": stdout }));
+            let elevated = options["elevated"].as_bool().unwrap_or(false);
+            if elevated {
+                let stdout = exec::run_ps_elevated(script)?;
+                return Ok(serde_json::json!({ "success": true, "output": stdout }));
+            } else {
+                let out = exec::run_ps_raw(script);
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                if !out.status.success() {
+                    let err_msg = if !stderr.trim().is_empty() {
+                        stderr.trim().to_string()
+                    } else if !stdout.trim().is_empty() {
+                        stdout.trim().to_string()
+                    } else {
+                        format!("Script execution failed (exit code {:?})", out.status.code())
+                    };
+                    return Err(err_msg);
+                }
+                return Ok(serde_json::json!({ "success": true, "output": stdout }));
+            }
         }
         let office_type = options["type"].as_str().unwrap_or("activate");
         match office_type {
             "activate" => {
-                let stdout = String::from_utf8_lossy(&exec::run_ps_raw("cscript //B //Nologo \"C:\\Program Files\\Microsoft Office\\Office16\\OSPP.VBS\" /act 2>&1 | Out-String").stdout).to_string();
+                let ps = r#"
+                $osppPaths = @(
+                    "$env:ProgramFiles\Microsoft Office\Office16\ospp.vbs",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office16\ospp.vbs",
+                    "$env:ProgramFiles\Microsoft Office\Office15\ospp.vbs",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office15\ospp.vbs"
+                )
+                $ospp = $osppPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+                if ($ospp) {
+                    cscript //nologo "$ospp" /act
+                } else {
+                    Write-Error "Không tìm thấy file ospp.vbs trên máy tính."
+                }
+                "#;
+                let stdout = exec::run_ps_elevated(ps)?;
                 Ok(serde_json::json!({ "success": true, "output": stdout }))
             }
             "convert_volume" => {
-                let stdout = String::from_utf8_lossy(&exec::run_ps_raw("cscript //B //Nologo \"C:\\Program Files\\Microsoft Office\\Office16\\OSPP.VBS\" /sethst: 2>&1 | Out-String").stdout).to_string();
+                let ps = r#"
+                $osppPaths = @(
+                    "$env:ProgramFiles\Microsoft Office\Office16\ospp.vbs",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office16\ospp.vbs",
+                    "$env:ProgramFiles\Microsoft Office\Office15\ospp.vbs",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office15\ospp.vbs"
+                )
+                $ospp = $osppPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+                if ($ospp) {
+                    cscript //nologo "$ospp" /sethst:
+                } else {
+                    Write-Error "Không tìm thấy file ospp.vbs trên máy tính."
+                }
+                "#;
+                let stdout = exec::run_ps_elevated(ps)?;
                 Ok(serde_json::json!({ "success": true, "output": stdout }))
             }
             _ => Err(format!("Unknown Office action: {}", office_type)),
@@ -883,6 +939,7 @@ pub fn run() {
             rollback_backup,
             verify_clean_operation,
 verify_bios_restore,
+            commands::portable_update::portable_update_check,
             commands::portable_update::portable_update_download,
             commands::portable_update::portable_update_apply,
             scan_junk,
@@ -897,6 +954,8 @@ verify_bios_restore,
             reset_windows_update,
             rebuild_icon_cache,
             read_tamper_protection,
+            get_time_info,
+            sync_vietnam_time,
             apply_power_plan,
             backup_registry_keys,
             apply_windows_settings,
@@ -922,7 +981,6 @@ create_system_restore_point,
         ])
 
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
 .setup(|app| {
             commands::portable_update::cleanup_stale_update();
             if let Ok(mut handle) = TAURI_APP_HANDLE.lock() {
