@@ -85,11 +85,17 @@ export default function OfficeStandardizer() {
 
   const { startTask, updateTask, completeTask, failTask } = useTaskManager();
 
-  const executeUtility = async (scriptGenFunc: (args?: any) => string, taskId: string, taskTitle = 'Tiện Ích Office', args?: any) => {
+  const executeUtility = async (
+    scriptGenFunc: (args?: any) => string, 
+    taskId: string, 
+    taskTitle = 'Tiện Ích Office', 
+    args?: any,
+    elevated = false
+  ) => {
     setActiveTask(taskId);
     setSuccessTask(null);
     setIsLoading(true);
-    setLoadingText('Đang thực thi...');
+    setLoadingText(elevated ? 'Đang yêu cầu quyền Administrator...' : 'Đang thực thi...');
     
     startTask(taskId, taskTitle, 'Tiện Ích Office', 'Đang thực thi...', 'office-standardizer');
 
@@ -124,11 +130,15 @@ export default function OfficeStandardizer() {
     };
 
     try {
-      setLoadingText('Đang áp dụng cài đặt Office...');
-      await (window as any).electronAPI.applyOfficeStandard({ script });
+      setLoadingText(elevated ? 'Đang áp dụng quyền Quản trị...' : 'Đang áp dụng cài đặt Office...');
+      const res = await (window as any).electronAPI.applyOfficeStandard({ script, elevated });
+      if (res && (res.success === false || res.ok === false)) {
+        finishTask(false, res.error || 'Thao tác không thành công');
+        return;
+      }
       finishTask(true);
     } catch (err: any) {
-      finishTask(false, err.message);
+      finishTask(false, err?.message || String(err));
     }
   };
 
@@ -158,11 +168,11 @@ export default function OfficeStandardizer() {
           <UtilityCard
             id="std-word"
             title="Chuẩn Hóa Word Việt Nam"
-            description="Tự động cấu hình Font Times New Roman 14, căn lề chuẩn Nghị định (2-2-3-2), giãn dòng 1.25."
+            description="Tự động cấu hình Font Times New Roman 14, căn lề chuẩn Nghị định (20-20-30-15mm), giãn dòng 1.25."
             icon={FileEdit}
             colorClass="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
             btnText="Áp dụng 1-Click"
-            onClick={() => executeUtility(generateOfficeStandardizerScript, 'std-word')}
+            onClick={() => executeUtility(generateOfficeStandardizerScript, 'std-word', 'Chuẩn Hóa Word Việt Nam')}
             isRunning={isLoading && activeTask === 'std-word'}
             isSuccess={successTask === 'std-word'}
             loadingText={loadingText}
@@ -174,7 +184,7 @@ export default function OfficeStandardizer() {
             icon={Clock}
             colorClass="bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
             btnText="Sửa lỗi ngay"
-            onClick={() => executeUtility(generateRegionalFixScript, 'fix-date')}
+            onClick={() => executeUtility(generateRegionalFixScript, 'fix-date', 'Sửa Lỗi Ngày Tháng (Excel)')}
             isRunning={isLoading && activeTask === 'fix-date'}
             isSuccess={successTask === 'fix-date'}
             loadingText={loadingText}
@@ -186,7 +196,7 @@ export default function OfficeStandardizer() {
             icon={Trash2}
             colorClass="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
             btnText="Dọn dẹp"
-            onClick={() => executeUtility(generateOfficeCacheCleanerScript, 'clean-cache')}
+            onClick={() => executeUtility(generateOfficeCacheCleanerScript, 'clean-cache', 'Dọn Dẹp Office Cache')}
             isRunning={isLoading && activeTask === 'clean-cache'}
             isSuccess={successTask === 'clean-cache'}
             loadingText={loadingText}
@@ -198,7 +208,7 @@ export default function OfficeStandardizer() {
             icon={Trash2}
             colorClass="bg-purple-500/20 text-purple-400 border border-purple-500/30"
             btnText="Xóa lịch sử"
-            onClick={() => executeUtility(generateOfficeHistoryCleanerScript, 'clean-history')}
+            onClick={() => executeUtility(generateOfficeHistoryCleanerScript, 'clean-history', 'Xóa Lịch Sử File Office')}
             isRunning={isLoading && activeTask === 'clean-history'}
             isSuccess={successTask === 'clean-history'}
             loadingText={loadingText}
@@ -219,7 +229,7 @@ export default function OfficeStandardizer() {
             icon={AlertTriangle}
             colorClass="bg-rose-500/20 text-rose-400 border border-rose-500/30"
             btnText="Xử lý Treo/Crash"
-            onClick={() => executeUtility(generateFixWordCrashScript, 'fix-crash', 'Sửa Lỗi Treo Word')}
+            onClick={() => executeUtility(generateFixWordCrashScript, 'fix-crash', 'Sửa Lỗi Treo Office')}
             isRunning={isLoading && activeTask === 'fix-crash'}
             isSuccess={successTask === 'fix-crash'}
             loadingText={loadingText}
@@ -231,7 +241,7 @@ export default function OfficeStandardizer() {
             icon={RefreshCw}
             colorClass="bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
             btnText="Chạy Quick Repair 1-Click"
-            onClick={() => executeUtility(generateOfficeQuickRepairScript, 'quick-repair', 'Quick Repair Office')}
+            onClick={() => executeUtility(generateOfficeQuickRepairScript, 'quick-repair', 'Office Quick Repair', undefined, true)}
             isRunning={isLoading && activeTask === 'quick-repair'}
             isSuccess={successTask === 'quick-repair'}
             loadingText={loadingText}
@@ -264,7 +274,7 @@ export default function OfficeStandardizer() {
             icon={ShieldCheck}
             colorClass="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
             btnText="Cài Đặt Chứng Chỉ Volume"
-            onClick={() => executeUtility(generateRetailToVolumeScript, 'retail-to-volume')}
+            onClick={() => executeUtility(generateRetailToVolumeScript, 'retail-to-volume', 'Chuyển Đổi Kênh Volume', undefined, true)}
             isRunning={isLoading && activeTask === 'retail-to-volume'}
             isSuccess={successTask === 'retail-to-volume'}
             loadingText={loadingText}
@@ -276,7 +286,7 @@ export default function OfficeStandardizer() {
             icon={Lock}
             colorClass="bg-purple-500/20 text-purple-400 border border-purple-500/30"
             btnText="Chặn Luồng Cập Nhật (Khuyên Dùng)"
-            onClick={() => executeUtility(generateBlockOfficeUpdateScript, 'block-updates')}
+            onClick={() => executeUtility(generateBlockOfficeUpdateScript, 'block-updates', 'Đóng Băng Cập Nhật Office', undefined, true)}
             isRunning={isLoading && activeTask === 'block-updates'}
             isSuccess={successTask === 'block-updates'}
             loadingText={loadingText}

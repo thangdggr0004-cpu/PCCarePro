@@ -63,7 +63,7 @@ $state.photoViewer = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows Photo Viewer\C
 $state.hideTaskbarIcons = (Get-RegDWord 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' 'EnableAutoTray' 0) -eq 1
 try {
     $languages = Get-WinUserLanguageList -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LanguageTag
-    $state.removeLangs = ($languages -contains 'en-US' -and $languages -contains 'vi' -and $languages.Count -le 2)
+    $state.removeLangs = ($languages -contains 'en-US' -and $languages.Count -le 2)
 } catch {
     $state.removeLangs = $false
 }
@@ -76,7 +76,12 @@ $state.hideWidgets = (Get-RegDWord 'HKCU:\Software\Microsoft\Windows\CurrentVers
 $state.hideChat = (Get-RegDWord 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarMn' 1) -eq 0
 $state.hideCopilot = (Get-RegDWord 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'ShowCopilotButton' 1) -eq 0
 $state.hideNews = (Get-RegDWord 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' 1) -eq 0
-$state.taskbarLeft = (Get-RegDWord 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarAl' 1) -eq 0
+$isWin11 = [System.Environment]::OSVersion.Version.Build -ge 22000
+if ($isWin11) {
+    $state.taskbarLeft = (Get-RegDWord 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarAl' 1) -eq 0
+} else {
+    $state.taskbarLeft = $true
+}
 
 # System Optimization (True = Disabled for optimization)
 $state.disableHibernate = (Get-RegDWord 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled' 1) -eq 0
@@ -90,7 +95,7 @@ $state.disablePrintSpooler = ((Get-Service -Name 'Spooler' -ErrorAction Silently
 $state.disableDefender = (Get-RegDWord 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender' 'DisableAntiSpyware' 0) -eq 1
 $state.disableTelemetry = (Get-RegDWord 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' 'AllowTelemetry' 1) -eq 0
 $state.disableXboxServices = ((Get-Service -Name 'XboxGipSvc' -ErrorAction SilentlyContinue).StartType -eq 'Disabled')
-$state.disableOneDrive = (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\OneDrive'))
+$state.disableOneDrive = [string]::IsNullOrEmpty((Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OneDrive' -ErrorAction SilentlyContinue).OneDrive)
 
 # Legacy backward compatibility mappings
 $state.hibernate = (-not $state.disableHibernate)
@@ -147,7 +152,7 @@ pub fn apply_windows_settings(state: serde_json::Value) -> Result<(), String> {
         ps.push_str("Remove-Item -Path 'HKCU:\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}' -Recurse -Force -ErrorAction SilentlyContinue\n");
     }
 
-    // photoViewer: register associations when checked (no else, exactly like Electron)
+    // photoViewer: register associations when checked, remove when unchecked
     if state["photoViewer"].as_bool().unwrap_or(false) {
         ps.push_str("$pvPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows Photo Viewer\\Capabilities\\FileAssociations'\n");
         ps.push_str("New-Item -Path $pvPath -Force -ErrorAction SilentlyContinue | Out-Null\n");
@@ -155,11 +160,14 @@ pub fn apply_windows_settings(state: serde_json::Value) -> Result<(), String> {
         ps.push_str("Set-ItemProperty -Path $pvPath -Name '.jpeg' -Value 'PhotoViewer.FileAssoc.Tiff' -Force -ErrorAction SilentlyContinue\n");
         ps.push_str("Set-ItemProperty -Path $pvPath -Name '.png' -Value 'PhotoViewer.FileAssoc.Tiff' -Force -ErrorAction SilentlyContinue\n");
         ps.push_str("Set-ItemProperty -Path $pvPath -Name '.bmp' -Value 'PhotoViewer.FileAssoc.Tiff' -Force -ErrorAction SilentlyContinue\n");
+    } else {
+        ps.push_str("$pvPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows Photo Viewer\\Capabilities\\FileAssociations'\n");
+        ps.push_str("Remove-Item -Path $pvPath -Force -Recurse -ErrorAction SilentlyContinue\n");
     }
 
-    // disableAutoBrightness: FeatureTestControl=512 when checked (only-if true)
+    // disableAutoBrightness: FeatureTestControl=512 when checked (only if Intel path exists)
     if state["disableAutoBrightness"].as_bool().unwrap_or(false) {
-        ps.push_str("Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Intel\\Display\\igfxcui\\powersettings' -Name 'FeatureTestControl' -Value 512 -Force -ErrorAction SilentlyContinue\n");
+        ps.push_str("if (Test-Path 'HKLM:\\SOFTWARE\\Intel\\Display\\igfxcui\\powersettings') { Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Intel\\Display\\igfxcui\\powersettings' -Name 'FeatureTestControl' -Value 512 -Force -ErrorAction SilentlyContinue }\n");
     }
 
     // hideTaskbarIcons: always sets EnableAutoTray (1 when checked, else 0)
@@ -217,37 +225,70 @@ pub fn run_ssd_trim() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "success": true, "message": "SSD TRIM started in background" }))
 }
 
-/// Backup registry keys
+/// Backup registry keys safely without overwriting previous keys
 pub fn backup_registry_keys() -> Result<serde_json::Value, String> {
     let dir = std::env::temp_dir().join("tp_registry_backup");
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("registry_backup.reg");
 
     let keys = vec![
-        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion",
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer",
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        ("01_HKLM_CurrentVersion", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion"),
+        ("02_HKCU_Explorer", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer"),
+        ("03_HKCU_Personalize", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+        ("04_HKCU_Search", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search"),
     ];
 
     let mut ps = String::new();
-    for key in &keys {
+    let dir_str = dir.to_string_lossy().replace('\'', "''");
+    for (name, key) in &keys {
         ps.push_str(&format!(
-            "reg export '{}' '{}' /y 2>$null\n",
-            key,
-            path.to_string_lossy().replace('\'', "''")
+            "reg export '{}' '{}\\{}.reg' /y 2>$null\n",
+            key, dir_str, name
         ));
     }
+
+    // Generate restore_backup.bat for 1-click user restore
+    ps.push_str(&format!(
+        r#"$restoreBat = @"
+@echo off
+chcp 65001 >nul
+echo [ThienPhatTechToolKit] Dang khoi phuc Registry backup...
+reg import "%~dp001_HKLM_CurrentVersion.reg"
+reg import "%~dp002_HKCU_Explorer.reg"
+reg import "%~dp003_HKCU_Personalize.reg"
+reg import "%~dp004_HKCU_Search.reg"
+echo Khoi phuc hoan tat! Vui long khoi dong lai Explorer hoac may tinh.
+pause
+"@
+[System.IO.File]::WriteAllText('{}\restore_backup.bat', $restoreBat, [System.Text.Encoding]::UTF8)
+"#,
+        dir_str
+    ));
+
     exec::run_ps_elevated(&ps)?;
 
-    Ok(serde_json::json!({ "path": dir.display().to_string() }))
+    Ok(serde_json::json!({
+        "success": true,
+        "path": dir.display().to_string(),
+        "files": [
+            "01_HKLM_CurrentVersion.reg",
+            "02_HKCU_Explorer.reg",
+            "03_HKCU_Personalize.reg",
+            "04_HKCU_Search.reg",
+            "restore_backup.bat"
+        ]
+    }))
 }
 
-/// Restart explorer.exe
+/// Restart explorer.exe cleanly under user session
 pub fn restart_explorer() -> Result<(), String> {
-    let _ = exec::run_cmd(&["taskkill", "/f", "/im", "explorer.exe"]);
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    let _ = std::process::Command::new("explorer.exe").spawn();
+    let ps = r#"
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 1200
+if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+    Start-Process explorer.exe
+}
+"#;
+    let _ = exec::run_ps(ps);
     Ok(())
 }
 
@@ -302,6 +343,7 @@ pub fn apply_advanced_optimization(options: serde_json::Value) -> Result<(), Str
     // Disable Delivery Optimization (DODownloadMode 0 + stop/disable dosvc)
     if options["disableDeliveryOptimization"].as_bool().unwrap_or(false) {
         ps.push_str("Stop-Service -Name dosvc -Force -ErrorAction SilentlyContinue; Set-Service -Name dosvc -StartupType Disabled -ErrorAction SilentlyContinue\n");
+        ps.push_str("New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization' -Force -ErrorAction SilentlyContinue | Out-Null\n");
         ps.push_str(
             "Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization' -Name 'DODownloadMode' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue\n",
         );
@@ -331,11 +373,50 @@ pub fn apply_advanced_optimization(options: serde_json::Value) -> Result<(), Str
         );
     }
 
-    // Purge standby RAM via EmptyWorkingSet on all processes
+    // Purge standby RAM via native NtSetSystemInformation (MemoryPurgeStandbyList) safely without emptying working sets
     if options["purgeStandbyRam"].as_bool().unwrap_or(false) {
-        ps.push_str(
-            "try {\n  $code = @\"\nusing System;\nusing System.Runtime.InteropServices;\npublic class WinRamCleaner {\n    [DllImport(\"psapi.dll\")]\n    public static extern int EmptyWorkingSet(IntPtr hProcess);\n}\n\"@\n  Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue\n  Get-Process -ErrorAction SilentlyContinue | ForEach-Object {\n    try { [WinRamCleaner]::EmptyWorkingSet($_.Handle) } catch {}\n  }\n} catch {}\n[System.GC]::Collect()\n[System.GC]::WaitForPendingFinalizers()\n",
-        );
+        ps.push_str(r#"
+try {
+  $code = @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+public class StandbyListPurge {
+    [DllImport("ntdll.dll")]
+    public static extern uint NtSetSystemInformation(int InfoClass, IntPtr Info, int Length);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    public static extern bool OpenProcessToken(IntPtr ProcessHandle, uint DesiredAccess, out IntPtr TokenHandle);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern bool LookupPrivilegeValue(string lpSystemName, string lpName, out long lpLuid);
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct TOKEN_PRIVILEGES { public int PrivilegeCount; public long Luid; public int Attributes; }
+    [DllImport("advapi32.dll", SetLastError = true)]
+    public static extern bool AdjustTokenPrivileges(IntPtr TokenHandle, bool DisableAllPrivileges, ref TOKEN_PRIVILEGES NewState, int BufferLength, IntPtr PreviousState, IntPtr ReturnLength);
+    public static bool EnablePrivilege(string privilege) {
+        IntPtr hToken;
+        if (!OpenProcessToken(Process.GetCurrentProcess().Handle, 0x0020 | 0x0008, out hToken)) return false;
+        TOKEN_PRIVILEGES tp = new TOKEN_PRIVILEGES();
+        tp.PrivilegeCount = 1; tp.Attributes = 0x00000002;
+        if (!LookupPrivilegeValue(null, privilege, out tp.Luid)) return false;
+        return AdjustTokenPrivileges(hToken, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+    }
+    public static bool PurgeStandby() {
+        try {
+            EnablePrivilege("SeProfileSingleProcessPrivilege");
+            EnablePrivilege("SeIncreaseQuotaPrivilege");
+            int command = 4;
+            GCHandle handle = GCHandle.Alloc(command, GCHandleType.Pinned);
+            uint result = NtSetSystemInformation(80, handle.AddrOfPinnedObject(), Marshal.SizeOf(command));
+            handle.Free();
+            return result == 0;
+        } catch { return false; }
+    }
+}
+"@
+  Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+  [StandbyListPurge]::PurgeStandby() | Out-Null
+} catch {}
+"#);
     }
 
     // Enable SSD trim (DisableDeleteNotification 0 + defrag /L C:)
@@ -373,9 +454,9 @@ pub fn restore_advanced_optimization() -> Result<(), String> {
     cache_clear();
     let mut ps = String::new();
 
-    // Reset HPET & Dynamic Tick (Electron: deletevalue disabledynamictick + useplatformclock true)
-    ps.push_str("bcdedit /deletevalue disabledynamictick\n");
-    ps.push_str("bcdedit /set useplatformclock true\n");
+    // Reset HPET & Dynamic Tick (Revert to Windows defaults: dynamic tick enabled, HPET not forced)
+    ps.push_str("bcdedit /deletevalue disabledynamictick 2>$null\n");
+    ps.push_str("bcdedit /deletevalue useplatformclock 2>$null\n");
 
     // Reset Network Throttling (Electron: NetworkThrottlingIndex 10 + SystemResponsiveness 20)
     ps.push_str(
@@ -446,12 +527,10 @@ $results += "SFC /SCANNOW: $sfcCode"
 
 # Run DISM
 $dismRaw = Sanitize ((& DISM /Online /Cleanup-Image /RestoreHealth 2>&1 | Out-String))
-if ($dismRaw -match 'no component store corruption was detected') {
+if ($dismRaw -match 'no component store corruption' -or $dismRaw -match 'restore operation completed successfully') {
     $dismStatus = 'Clean'
-} elseif ($dismRaw -match 'the component store corruption was repaired') {
+} elseif ($dismRaw -match 'the component store corruption was repaired' -or $dismRaw -match 'corruption was repaired') {
     $dismStatus = 'Repaired'
-} elseif ($dismRaw -match 'restore operation completed successfully') {
-    $dismStatus = 'Clean'
 } else {
     $dismStatus = 'Unknown'
 }
@@ -497,23 +576,44 @@ pub fn reset_windows_update() -> Result<serde_json::Value, String> {
 $results = @()
 
 # Stop services
-Stop-Service -Name BITS, wuauserv, appidsvc, cryptsvc -Force -ErrorAction SilentlyContinue
-$results += "Đã dừng BITS, wuauserv, appidsvc, cryptsvc"
+$services = @('BITS', 'wuauserv', 'appidsvc', 'cryptsvc')
+Stop-Service -Name $services -Force -ErrorAction SilentlyContinue
+foreach ($s in $services) {
+    $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq 'Running') {
+        try { $svc.WaitForStatus('Stopped', [System.TimeSpan]::FromSeconds(3)) } catch {}
+    }
+}
+$results += "Đã dừng các dịch vụ cập nhật (BITS, wuauserv, appidsvc, cryptsvc)"
 
 # Remove SoftwareDistribution (whole folder)
-if (Test-Path "$env:windir\SoftwareDistribution") {
-    Remove-Item "$env:windir\SoftwareDistribution" -Recurse -Force -ErrorAction SilentlyContinue
-    $results += "Đã xóa SoftwareDistribution"
+$sdPath = "$env:windir\SoftwareDistribution"
+if (Test-Path $sdPath) {
+    Remove-Item $sdPath -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $sdPath)) {
+        $results += "Đã xóa SoftwareDistribution"
+    } else {
+        $results += "Đã dọn dẹp các tệp trong SoftwareDistribution (các file đang khóa sẽ tự xóa khi khởi động lại)"
+    }
+} else {
+    $results += "SoftwareDistribution đã sạch sẽ từ trước"
 }
 
 # Remove catroot2 (whole folder)
-if (Test-Path "$env:windir\system32\catroot2") {
-    Remove-Item "$env:windir\system32\catroot2" -Recurse -Force -ErrorAction SilentlyContinue
-    $results += "Đã xóa catroot2"
+$crPath = "$env:windir\system32\catroot2"
+if (Test-Path $crPath) {
+    Remove-Item $crPath -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $crPath)) {
+        $results += "Đã xóa catroot2"
+    } else {
+        $results += "Đã dọn dẹp tệp trong catroot2 (các file đang khóa sẽ tự xóa khi khởi động lại)"
+    }
+} else {
+    $results += "catroot2 đã sạch sẽ từ trước"
 }
 
 # Restart services
-Start-Service -Name BITS, wuauserv, appidsvc, cryptsvc -ErrorAction SilentlyContinue
+Start-Service -Name $services -ErrorAction SilentlyContinue
 $results += "Đã khởi động lại services"
 
 Write-Output ($results -join "|")
@@ -538,30 +638,49 @@ $results = @()
 
 # Stop Explorer
 Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
 $results += "Đã dừng Explorer"
 
 # Remove icon cache files
 $iconCacheFiles = Get-ChildItem "$env:localappdata\Microsoft\Windows\Explorer\iconcache*" -ErrorAction SilentlyContinue
 if ($iconCacheFiles) {
     Remove-Item "$env:localappdata\Microsoft\Windows\Explorer\iconcache*" -Force -ErrorAction SilentlyContinue
-    $results += "Đã xóa $($iconCacheFiles.Count) file icon cache"
+    $remaining = (Get-ChildItem "$env:localappdata\Microsoft\Windows\Explorer\iconcache*" -ErrorAction SilentlyContinue).Count
+    if ($remaining -eq 0) {
+        $results += "Đã xóa toàn bộ $($iconCacheFiles.Count) file icon cache"
+    } else {
+        $results += "Đã xóa $(($iconCacheFiles.Count - $remaining)) file icon cache (còn $remaining file đang khóa)"
+    }
+} else {
+    $results += "Icon cache đã sạch sẽ từ trước"
 }
 
 # Remove thumb cache files
 $thumbCacheFiles = Get-ChildItem "$env:localappdata\Microsoft\Windows\Explorer\thumbcache*" -ErrorAction SilentlyContinue
 if ($thumbCacheFiles) {
     Remove-Item "$env:localappdata\Microsoft\Windows\Explorer\thumbcache*" -Force -ErrorAction SilentlyContinue
-    $results += "Đã xóa $($thumbCacheFiles.Count) file thumb cache"
+    $remainingThumb = (Get-ChildItem "$env:localappdata\Microsoft\Windows\Explorer\thumbcache*" -ErrorAction SilentlyContinue).Count
+    if ($remainingThumb -eq 0) {
+        $results += "Đã xóa toàn bộ $($thumbCacheFiles.Count) file thumb cache"
+    } else {
+        $results += "Đã xóa $(($thumbCacheFiles.Count - $remainingThumb)) file thumb cache"
+    }
 }
 
 # Remove IconCache.db
-if (Test-Path "$env:localappdata\IconCache.db") {
-    Remove-Item "$env:localappdata\IconCache.db" -Force -ErrorAction SilentlyContinue
-    $results += "Đã xóa IconCache.db"
+$legacyIcon = "$env:localappdata\IconCache.db"
+if (Test-Path $legacyIcon) {
+    Remove-Item $legacyIcon -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path $legacyIcon)) {
+        $results += "Đã xóa IconCache.db"
+    }
 }
 
-# Restart Explorer
-Start-Process explorer
+# Restart Explorer cleanly
+Start-Sleep -Milliseconds 500
+if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+    Start-Process explorer.exe
+}
 $results += "Đã khởi động lại Explorer"
 
 Write-Output ($results -join "|")
@@ -581,9 +700,14 @@ Write-Output ($results -join "|")
 /// enable), and the whole script runs ONCE elevated (`runPowerShellScriptElevated`).
 pub fn apply_system_optimization(state: serde_json::Value) -> Result<(), String> {
     cache_clear();
-    let is_disable = |disable_key: &str, enable_key: &str| {
-        state.get(disable_key).and_then(|v| v.as_bool()) == Some(true)
-            || state.get(enable_key).and_then(|v| v.as_bool()) == Some(false)
+    let is_disable = |disable_key: &str, enable_key: &str| -> bool {
+        if let Some(v) = state.get(disable_key).and_then(|v| v.as_bool()) {
+            return v;
+        }
+        if let Some(v) = state.get(enable_key).and_then(|v| v.as_bool()) {
+            return !v;
+        }
+        false
     };
 
     let mut ps = String::new();
@@ -668,6 +792,8 @@ pub fn apply_system_optimization(state: serde_json::Value) -> Result<(), String>
     // 12. OneDrive Auto-start
     if is_disable("disableOneDrive", "oneDrive") {
         ps.push_str("Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'OneDrive' -Force -ErrorAction SilentlyContinue\n");
+    } else {
+        ps.push_str("if (Test-Path \"$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe\") { Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'OneDrive' -Value \"`\"$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe`\" /background\" -Force -ErrorAction SilentlyContinue }\n");
     }
 
     exec::run_ps_elevated(&ps).map(|_| ())

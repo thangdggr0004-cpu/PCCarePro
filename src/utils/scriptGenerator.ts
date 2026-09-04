@@ -1,4 +1,4 @@
-﻿import { DocumentStandardPreset } from '../types.js';
+import { DocumentStandardPreset } from '../types.js';
 
 // Helper to trigger file download in browser
 export function downloadFile(content: string, filename: string, mimeType: string = 'text/plain') {
@@ -172,7 +172,6 @@ if ($activeAdapters.Count -eq 0) {
         if ($result.ReturnValue -eq 0) {
             Write-Host "    [+] Đã cập nhật DNS thành công." -ForegroundColor Green
         } else {
-            Write-Host "    [!] Thất bại với mã lỗi: $($result.ReturnValue)" -ForegroundColor Red
         }
     }
 }
@@ -190,7 +189,9 @@ Write-Host "====================================================================
 `;
 }
 
-// 6. Word Document Standardizer - Pure PowerShell COM (runs via runPowerShellScriptElevated)
+
+
+// 6. Word Document Standardizer - Pure PowerShell COM
 export function generateOfficeStandardizerScript(preset: DocumentStandardPreset): string {
   // Convert mm to points (Word COM uses points, not twips for margin setting via MillimetersToPoints)
   // 1 point = 1/72 inch; 1 mm = 72/25.4 points
@@ -212,23 +213,23 @@ Write-Host "====================================================================
 Write-Host "[*] Font: ${preset.fontName} ${preset.fontSizeBody}pt | Le T:${preset.marginTop}/D:${preset.marginBottom}/Tr:${preset.marginLeft}/P:${preset.marginRight}mm | Gian dong:${preset.lineSpacing}" -ForegroundColor Yellow
 Write-Host ""
 
-# Dung Word COM Object - buoc 1: tat WINWORD truoc
-Write-Host "[1/3] Tat tien trinh Word dang chay (neu co)..." -ForegroundColor Yellow
+# Buoc 1: Dong tat ca tien trinh Word dang chay
+Write-Host "[1/3] Dong tien trinh Word dang chay (neu co)..." -ForegroundColor Yellow
 Stop-Process -Name "WINWORD" -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds 600
 
+$word = $null
+$tpl = $null
 try {
-    Write-Host "[2/3] Ket noi Word COM va mo Normal.dotm..." -ForegroundColor Yellow
+    Write-Host "[2/3] Khoi tao Word COM va nap template Normal.dotm..." -ForegroundColor Yellow
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
-    $word.DisplayAlerts = [Microsoft.Office.Interop.Word.WdAlertLevel]::wdAlertsNone
+    $word.DisplayAlerts = 0
 
-    # Mo truc tiep file Normal.dotm (khong phai Documents.Add)
-    $normalPath = $word.NormalTemplate.FullName
-    Write-Host "    Normal.dotm path: $normalPath"
-    $tpl = $word.Documents.Open($normalPath, $false, $false)
+    # Su dung NormalTemplate.OpenAsDocument() de lay document object an toan
+    $tpl = $word.NormalTemplate.OpenAsDocument()
 
-    Write-Host "[3/3] Dang thiet lap chuan hoa..." -ForegroundColor Yellow
+    Write-Host "[3/3] Dang ap dung dinh dang chuan Nghi dinh 30/2020..." -ForegroundColor Yellow
 
     # --- Kho giay va le trang ---
     $tpl.PageSetup.PaperSize   = 7    # wdPaperA4
@@ -239,7 +240,7 @@ try {
     $tpl.PageSetup.RightMargin  = ${rightPt}
 
     # --- Style Normal: Font + Gian dong ---
-    $styleNormal = $tpl.Styles | Where-Object { $_.NameLocal -eq "Normal" -or $_.NameLocal -eq "Binh thuong" }
+    $styleNormal = $tpl.Styles | Where-Object { $_.NameLocal -eq "Normal" -or $_.NameLocal -eq "Bình thường" -or $_.NameLocal -eq "Default" }
     if (-not $styleNormal) { $styleNormal = $tpl.Styles.Item("Normal") }
 
     $styleNormal.Font.Name   = "${preset.fontName}"
@@ -253,29 +254,30 @@ try {
     $styleNormal.ParagraphFormat.SpaceBefore     = 0
     $styleNormal.ParagraphFormat.Alignment       = 3    # wdAlignParagraphJustify
 
-    # Luu va dong Normal.dotm
+    # Luu template
     $tpl.Save()
-    $tpl.Close($false)
-    $word.Quit()
 
     Write-Host ""
     Write-Host "====================================================================" -ForegroundColor Green
-    Write-Host "[+] THANH CONG! Normal.dotm da duoc cap nhat." -ForegroundColor Green
-    Write-Host "    Tu gio mo Word moi se tu dong ap dung:" -ForegroundColor Green
+    Write-Host "[+] THANH CONG! Normal.dotm da duoc cap nhat chuan hoa." -ForegroundColor Green
     Write-Host "    - Font: ${preset.fontName} ${preset.fontSizeBody}pt" -ForegroundColor Green
     Write-Host "    - Le: Tren ${preset.marginTop}mm / Duoi ${preset.marginBottom}mm / Trai ${preset.marginLeft}mm / Phai ${preset.marginRight}mm" -ForegroundColor Green
-    Write-Host "    - Gian dong: ${preset.lineSpacing} lines (chuan Nghi dinh 30/2020)" -ForegroundColor Green
+    Write-Host "    - Gian dong: ${preset.lineSpacing} lines (Chuan Nghi dinh 30/2020)" -ForegroundColor Green
     Write-Host "====================================================================" -ForegroundColor Green
 } catch {
-    Write-Host "" -ForegroundColor Red
-    Write-Host "[!] LOI khi chuan hoa Normal.dotm:" -ForegroundColor Red
-    Write-Host "    $_" -ForegroundColor Red
-    Write-Host "" -ForegroundColor Red
-    Write-Host "    Nguyen nhan co the:" -ForegroundColor Yellow
-    Write-Host "    - Microsoft Word chua duoc cai dat tren may nay" -ForegroundColor Yellow
-    Write-Host "    - File Normal.dotm dang bi khoa boi phan mem khac" -ForegroundColor Yellow
-    Write-Host "    - Thu dong tat ca cua so Office roi chay lai." -ForegroundColor Yellow
-    try { if ($word) { $word.Quit() } } catch {}
+    Write-Host ""
+    Write-Error "[!] LOI khi chuan hoa Word: $_"
+    exit 1
+} finally {
+    if ($tpl) {
+        try { $tpl.Close([ref]$false) } catch {}
+    }
+    if ($word) {
+        try { $word.Quit([ref]$false) } catch {}
+        try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null } catch {}
+    }
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
 }
 `;
 }
@@ -286,18 +288,31 @@ export function generateRegionalFixScript(): string {
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "Đang chuẩn hóa định dạng ngày tháng hệ thống thành dd/MM/yyyy..."
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "      CHUAN HOA DINH DANG NGAY THANG EXCEL (dd/MM/yyyy)             " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "[*] Thiet lap Registry International: sShortDate=dd/MM/yyyy, sDate=/, iDate=1..." -ForegroundColor Yellow
 Set-ItemProperty -Path "HKCU:\\Control Panel\\International" -Name "sShortDate" -Value "dd/MM/yyyy"
 Set-ItemProperty -Path "HKCU:\\Control Panel\\International" -Name "sDate" -Value "/"
 Set-ItemProperty -Path "HKCU:\\Control Panel\\International" -Name "iDate" -Value "1"
 
-# Notify Windows of setting change
-$signature = '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);'
-$type = Add-Type -MemberDefinition $signature -Name "Win32SendMessage" -Namespace "Win32" -PassThru
-$result = [UIntPtr]::Zero
-$type::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, "Control Panel", 2, 5000, [ref]$result)
+# Broadcast thong bao he thong cap nhat ngay lap tuc
+Write-Host "[*] Gui tin hieu Broadcast WM_SETTINGCHANGE den toan he thong..." -ForegroundColor Yellow
+if (-not ("Win32.Win32SendMessage" -as [type])) {
+    $signature = '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);'
+    Add-Type -MemberDefinition $signature -Name "Win32SendMessage" -Namespace "Win32" | Out-Null
+}
 
-Write-Host "Hoàn tất chuẩn hóa dd/MM/yyyy! Hệ thống đã cập nhật tức thì."
+$result = [UIntPtr]::Zero
+[Win32.Win32SendMessage]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, "Control Panel", 2, 5000, [ref]$result) | Out-Null
+[Win32.Win32SendMessage]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, "intl", 2, 5000, [ref]$result) | Out-Null
+
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] HOAN TAT! Dinh dang ngay thang da duoc dong bo chuan dd/MM/yyyy." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
@@ -307,17 +322,43 @@ export function generateOfficeCacheCleanerScript(): string {
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "Đang buộc dừng các tiến trình Office bị treo..."
-Stop-Process -Name "WINWORD", "EXCEL", "POWERPNT" -Force -ErrorAction SilentlyContinue
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "         DON DEP OFFICE CACHE VA GIAI PHONG TIEN TRINH KHOA         " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
 
-Write-Host "Đang dọn dẹp bộ nhớ đệm (Cache) của Office..."
-$cachePath = "$env:LOCALAPPDATA\\Microsoft\\Office\\16.0\\OfficeFileCache"
-if (Test-Path $cachePath) {
-    Remove-Item -Path "$cachePath\\*" -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "Đã dọn sạch Office Cache thành công!"
-} else {
-    Write-Host "Không tìm thấy bộ nhớ đệm Office cần dọn."
+Write-Host "[1/2] Buoc dung cac tien trinh Office va tien trinh khoa cache..." -ForegroundColor Yellow
+$procList = @("WINWORD", "EXCEL", "POWERPNT", "OUTLOOK", "ONENOTE", "msosync", "groove", "OfficeClickToRun")
+foreach ($p in $procList) {
+    Stop-Process -Name $p -Force -ErrorAction SilentlyContinue
 }
+Start-Sleep -Milliseconds 600
+
+Write-Host "[2/2] Dang quet va don dep bo nho dem Office..." -ForegroundColor Yellow
+$cacheDirs = @(
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\16.0\\OfficeFileCache",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\15.0\\OfficeFileCache",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\16.0\\WebServiceCache",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\15.0\\WebServiceCache",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\16.0\\Wef",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\15.0\\Wef",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\UnsavedFiles"
+)
+
+$clearedCount = 0
+foreach ($dir in $cacheDirs) {
+    if (Test-Path $dir) {
+        $items = Get-ChildItem -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
+        $clearedCount += $items.Count
+        Remove-Item -Path "$dir\\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  [-] Da don: $dir"
+    }
+}
+
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] THANH CONG! Da don sach $clearedCount muc bo nho dem Office." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
@@ -327,163 +368,339 @@ export function generateOfficeHistoryCleanerScript(): string {
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "Đang xóa lịch sử file đã mở gần đây của Word..."
-$wordKey = "HKCU:\\Software\\Microsoft\\Office\\16.0\\Word\\User MRU"
-if (Test-Path $wordKey) { Remove-Item -Path $wordKey -Recurse -Force -ErrorAction SilentlyContinue }
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "           XOA LICH SU FILE OFFICE DA MO GAN DAY (RECENT)           " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
 
-Write-Host "Đang xóa lịch sử file đã mở gần đây của Excel..."
-$excelKey = "HKCU:\\Software\\Microsoft\\Office\\16.0\\Excel\\User MRU"
-if (Test-Path $excelKey) { Remove-Item -Path $excelKey -Recurse -Force -ErrorAction SilentlyContinue }
+Write-Host "[1/2] Dang xoa lich su Recent trong Registry cua tat ca ung dung Office..." -ForegroundColor Yellow
+$apps = @("Word", "Excel", "PowerPoint", "Access", "Publisher")
+$versions = @("16.0", "15.0", "14.0")
+$subKeys = @("User MRU", "File MRU", "Place MRU")
 
-Write-Host "Đã xóa sạch lịch sử truy cập Office gần đây!"
+$clearedKeys = 0
+foreach ($ver in $versions) {
+    foreach ($app in $apps) {
+        foreach ($sub in $subKeys) {
+            $keyPath = "HKCU:\\Software\\Microsoft\\Office\\$ver\\$app\\$sub"
+            if (Test-Path $keyPath) {
+                Remove-Item -Path $keyPath -Recurse -Force -ErrorAction SilentlyContinue
+                $clearedKeys++
+            }
+        }
+    }
+}
+
+Write-Host "[2/2] Dang xoa file shortcut Recent trong thu muc AppData..." -ForegroundColor Yellow
+$recentCount = 0
+$recentDir = "$env:APPDATA\\Microsoft\\Office\\Recent"
+if (Test-Path $recentDir) {
+    $items = Get-ChildItem -Path $recentDir -Force -ErrorAction SilentlyContinue
+    $recentCount = $items.Count
+    Remove-Item -Path "$recentDir\\*" -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] THANH CONG! Da xoa sach $clearedKeys khoa Registry va $recentCount shortcut lich su." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
+// 10. Fix Word/Excel Crashes, corrupt Normal.dotm & bad Add-ins
 export function generateFixWordCrashScript(): string {
   return `# PowerShell script to fix Word/Excel crashes
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "[*] Đang đóng toàn bộ tiến trình Word/Excel..."
-Stop-Process -Name "WINWORD", "EXCEL", "POWERPNT" -Force -ErrorAction SilentlyContinue
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "        SUA LOI TREO / CRASH WORD VA EXCEL CHUYEN SAU                " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
 
-Write-Host "[*] Xóa cache Normal.dotm (Khôi phục khởi động Word)..."
-$appData = [Environment]::GetFolderPath("ApplicationData")
-$wordTemplates = "$appData\\Microsoft\\Templates"
-if (Test-Path "$wordTemplates\\Normal.dotm") {
-    Remove-Item "$wordTemplates\\Normal.dotm" -Force
+Write-Host "[1/4] Dong toan bo tien trinh Office dang bi xung dot..." -ForegroundColor Yellow
+$procList = @("WINWORD", "EXCEL", "POWERPNT", "OUTLOOK", "ONENOTE", "msosync")
+foreach ($p in $procList) {
+    Stop-Process -Name $p -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Milliseconds 600
+
+Write-Host "[2/4] Sao luu va dat lai file mau Normal.dotm..." -ForegroundColor Yellow
+$templates = [System.IO.Path]::Combine([Environment]::GetFolderPath("ApplicationData"), "Microsoft\\Templates")
+$normalDotm = [System.IO.Path]::Combine($templates, "Normal.dotm")
+if (Test-Path $normalDotm) {
+    Copy-Item -Path $normalDotm -Destination "$normalDotm.bak" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $normalDotm -Force -ErrorAction SilentlyContinue
+    Write-Host "  [-] Da backup sang Normal.dotm.bak va xoa Normal.dotm bi loi."
 }
 
-Write-Host "[*] Dọn dẹp Add-ins rác gây treo máy..."
-$registryPaths = @(
+Write-Host "[3/4] Xoa bo dem loi crash loop (Resiliency) va Add-ins gay treo..." -ForegroundColor Yellow
+$regPaths = @(
     "HKCU:\\Software\\Microsoft\\Office\\Word\\Addins",
-    "HKCU:\\Software\\Microsoft\\Office\\Excel\\Addins"
+    "HKCU:\\Software\\Microsoft\\Office\\Excel\\Addins",
+    "HKCU:\\Software\\Microsoft\\Office\\PowerPoint\\Addins",
+    "HKCU:\\Software\\Microsoft\\Office\\16.0\\Word\\Resiliency",
+    "HKCU:\\Software\\Microsoft\\Office\\16.0\\Excel\\Resiliency",
+    "HKCU:\\Software\\Microsoft\\Office\\15.0\\Word\\Resiliency",
+    "HKCU:\\Software\\Microsoft\\Office\\15.0\\Excel\\Resiliency"
 )
-foreach ($path in $registryPaths) {
-    if (Test-Path $path) {
-        Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+foreach ($rp in $regPaths) {
+    if (Test-Path $rp) {
+        Remove-Item -Path $rp -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  [-] Da don khoa: $rp"
     }
 }
-Write-Host "[+] Đã xử lý xong lỗi treo văng ứng dụng!"
+
+Write-Host "[4/4] Don dep thu muc khoi dong tu dong (STARTUP / XLSTART)..." -ForegroundColor Yellow
+$startupPaths = @(
+    "$env:APPDATA\\Microsoft\\Word\\STARTUP",
+    "$env:APPDATA\\Microsoft\\Excel\\XLSTART"
+)
+foreach ($sp in $startupPaths) {
+    if (Test-Path $sp) {
+        Remove-Item -Path "$sp\\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  [-] Da don thu muc: $sp"
+    }
+}
+
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] THANH CONG! Da khac phuc toan bo nguyen nhan gay treo/crash Office." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
+// 11. Clear Office Credentials & Identity Cache
 export function generateClearOfficeCredentialsScript(): string {
   return `# PowerShell script to clear Office Credentials
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "[*] Đang xóa bộ nhớ đệm xác thực Windows Credentials..."
-cmdkey /list | Select-String "MicrosoftOffice" | ForEach-Object { 
-    $target = ($_ -split "Target: ")[1]
-    if ($target) { cmdkey /delete:$target > $null }
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "         XOA PHIEN DANG NHAP VA KET TAI KHOAN OFFICE                 " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "[1/3] Dong toan bo tien trinh Office va dong bo..." -ForegroundColor Yellow
+$procList = @("WINWORD", "EXCEL", "POWERPNT", "OUTLOOK", "ONENOTE", "msosync")
+foreach ($p in $procList) {
+    Stop-Process -Name $p -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Milliseconds 600
+
+Write-Host "[2/3] Xoa thong tin xac thuc Office trong Windows Credential Manager..." -ForegroundColor Yellow
+$cmdkeyOut = cmdkey /list
+$deletedCreds = 0
+foreach ($line in $cmdkeyOut) {
+    if ($line -match "Target:\s*(.*)") {
+        $target = $matches[1].Trim()
+        if ($target -match "MicrosoftOffice|MicrosoftAccount|MS\\.Outlook") {
+            cmdkey /delete:$target > $null
+            $deletedCreds++
+            Write-Host "  [-] Da xoa credential: $target"
+        }
+    }
 }
 
-Write-Host "[*] Xóa khóa Identity của Office trong Registry..."
-$identityKey = "HKCU:\\Software\\Microsoft\\Office\\16.0\\Common\\Identity"
-if (Test-Path $identityKey) {
-    Remove-Item -Path $identityKey -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "[3/3] Xoa khoa Identity Registry va Licensing cache..." -ForegroundColor Yellow
+$identityKeys = @(
+    "HKCU:\\Software\\Microsoft\\Office\\16.0\\Common\\Identity",
+    "HKCU:\\Software\\Microsoft\\Office\\15.0\\Common\\Identity"
+)
+foreach ($ik in $identityKeys) {
+    if (Test-Path $ik) {
+        Remove-Item -Path $ik -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  [-] Da xoa Identity: $ik"
+    }
 }
 
-$licensingFolder = "$env:LOCALAPPDATA\\Microsoft\\Office\\16.0\\Licensing"
-if (Test-Path $licensingFolder) {
-    Remove-Item -Path "$licensingFolder\\*" -Force -Recurse -ErrorAction SilentlyContinue
+$licensingDirs = @(
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\16.0\\Licensing",
+    "$env:LOCALAPPDATA\\Microsoft\\Office\\15.0\\Licensing"
+)
+foreach ($ld in $licensingDirs) {
+    if (Test-Path $ld) {
+        Remove-Item -Path "$ld\\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  [-] Da xoa Licensing cache: $ld"
+    }
 }
 
-Write-Host "[+] Đã xóa sạch phiên đăng nhập bị kẹt. Vui lòng mở lại Office để đăng nhập mới!"
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] THANH CONG! Da xoa $deletedCreds credentials va lam sach phien Office." -ForegroundColor Green
+Write-Host "    Vui long mo lai Word hoac Excel de dang nhap tai khoan moi." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
+// 12. Convert Retail to Volume Licensing (Pure PowerShell, Runs Elevated)
 export function generateRetailToVolumeScript(): string {
-  return `@echo off
-chcp 65001 >nul
-echo [*] Đang tìm và nạp chứng chỉ Volume (VL) cho Office...
+  return `# PowerShell script to convert Office Retail to Volume Licensing
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-set "officePath="
-for %%p in (
-    "%ProgramFiles%\\Microsoft Office\\root\\Licenses16"
-    "%ProgramFiles(x86)%\\Microsoft Office\\root\\Licenses16"
-) do (
-    if exist "%%~p\\proplusvl_kms*.xrm-ms" (
-        set "officePath=%%~p"
-    )
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "    CHUYEN DOI KENH CAP PHEP OFFICE (RETAIL -> VOLUME LICENSING)   " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "[1/3] Dang tim kiem thu muc chung chi Office (Licenses16)..." -ForegroundColor Yellow
+$possibleLicenseDirs = @(
+    "$env:ProgramFiles\\Microsoft Office\\root\\Licenses16",
+    "\${env:ProgramFiles(x86)}\\Microsoft Office\\root\\Licenses16",
+    "C:\\Program Files\\Microsoft Office\\root\\Licenses16",
+    "C:\\Program Files (x86)\\Microsoft Office\\root\\Licenses16"
 )
+$licenseDir = $possibleLicenseDirs | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-if "%officePath%"=="" (
-    echo [ERROR] Không tìm thấy thư mục chứng chỉ của Office 16.
-    exit /b
+if (-not $licenseDir) {
+    Write-Error "[!] Khong tim thay thu muc chung chi cua Office (Licenses16)."
+    exit 1
+}
+Write-Host "  [-] Thu muc chung chi: $licenseDir"
+
+Write-Host "[2/3] Dang dinh vi tap tin quan tri ban quyen ospp.vbs..." -ForegroundColor Yellow
+$possibleOspp = @(
+    "$env:ProgramFiles\\Microsoft Office\\Office16\\ospp.vbs",
+    "\${env:ProgramFiles(x86)}\\Microsoft Office\\Office16\\ospp.vbs",
+    "C:\\Program Files\\Microsoft Office\\Office16\\ospp.vbs",
+    "C:\\Program Files (x86)\\Microsoft Office\\Office16\\ospp.vbs"
 )
+$ospp = $possibleOspp | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-set "ospp="
-for %%p in (
-    "%ProgramFiles%\\Microsoft Office\\Office16\\ospp.vbs"
-    "%ProgramFiles(x86)%\\Microsoft Office\\Office16\\ospp.vbs"
-) do (
-    if exist "%%~p" set "ospp=%%~p"
-)
+if (-not $ospp) {
+    Write-Error "[!] Khong tim thay tap tin ospp.vbs tren may tinh."
+    exit 1
+}
+Write-Host "  [-] File OSPP: $ospp"
 
-if "%ospp%"=="" (
-    echo [ERROR] Không tìm thấy file ospp.vbs.
-    exit /b
-)
+Write-Host "[3/3] Dang nap chung chi Volume (VL) vao he thong ban quyen..." -ForegroundColor Yellow
+$licFiles = Get-ChildItem -Path $licenseDir -Filter "proplusvl_*.xrm-ms" -ErrorAction SilentlyContinue
+if ($licFiles.Count -eq 0) {
+    $licFiles = Get-ChildItem -Path $licenseDir -Filter "*vl_*.xrm-ms" -ErrorAction SilentlyContinue
+}
 
-echo [*] Nạp chứng chỉ từ: %officePath%
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_kms_client-ppd.xrm-ms" >nul
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_kms_client-ul-oob.xrm-ms" >nul
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_kms_client-ul.xrm-ms" >nul
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_mak-pl.xrm-ms" >nul
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_mak-ppd.xrm-ms" >nul
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_mak-ul-oob.xrm-ms" >nul
-cscript //nologo "%ospp%" /inslic:"%officePath%\\proplusvl_mak-ul.xrm-ms" >nul
+if ($licFiles.Count -eq 0) {
+    Write-Error "[!] Khong tim thay file chung chi .xrm-ms nao trong $licenseDir"
+    exit 1
+}
 
-echo [+] Đã ép chuyển thành công kênh Retail sang Volume Licensing!
+$installedCount = 0
+foreach ($f in $licFiles) {
+    Write-Host "  [*] Dang nap chung chi: $($f.Name)..."
+    $res = cscript //nologo "$ospp" /inslic:"$($f.FullName)" 2>&1 | Out-String
+    if ($res -match "successfully" -or $res -match "thành công" -or $LASTEXITCODE -eq 0) {
+        $installedCount++
+    }
+}
+
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] THANH CONG! Da nap $installedCount/$($licFiles.Count) chung chi Volume cho Office." -ForegroundColor Green
+Write-Host "    Gio day may da san sang kich hoat qua may chu KMS noi bo hoac MAK." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
+// 13. Block Office Updates (GPO + ClickToRun + Scheduled Tasks, Runs Elevated)
 export function generateBlockOfficeUpdateScript(): string {
   return `# PowerShell script to block Office Updates
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "[*] Đang đóng băng tính năng cập nhật của Office..."
-$updateKey = "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Office\\16.0\\Common\\OfficeUpdate"
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "                 DONG BANG CAP NHAT MICROSOFT OFFICE                 " -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host ""
 
+Write-Host "[1/3] Thiet lap Group Policy chan cap nhat tu dong..." -ForegroundColor Yellow
+$updateKey = "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Office\\16.0\\Common\\OfficeUpdate"
 if (-not (Test-Path $updateKey)) {
     New-Item -Path $updateKey -Force | Out-Null
 }
-
 Set-ItemProperty -Path $updateKey -Name "EnableAutomaticUpdates" -Value 0 -Type DWord -Force
 Set-ItemProperty -Path $updateKey -Name "HideEnableDisableUpdates" -Value 1 -Type DWord -Force
+Write-Host "  [-] Da thiet lap GPO: EnableAutomaticUpdates=0, HideEnableDisableUpdates=1"
 
-Write-Host "[+] Đã đóng băng hoàn toàn cập nhật. Phiên bản hiện tại sẽ giữ nguyên!"
+Write-Host "[2/3] Dong bo cau hinh ClickToRun Configuration..." -ForegroundColor Yellow
+$c2rConfig = "HKLM:\\SOFTWARE\\Microsoft\\Office\\ClickToRun\\Configuration"
+if (Test-Path $c2rConfig) {
+    Set-ItemProperty -Path $c2rConfig -Name "UpdatesEnabled" -Value "False" -Force
+    Write-Host "  [-] Da cau hinh ClickToRun Configuration: UpdatesEnabled=False"
+}
+
+Write-Host "[3/3] Vo hieu hoa tien trinh Scheduled Tasks cap nhat Office..." -ForegroundColor Yellow
+$tasks = @(
+    "\\Microsoft\\Office\\Office Automatic Updates 2.0",
+    "\\Microsoft\\Office\\Office ClickToRun Service Monitor"
+)
+foreach ($t in $tasks) {
+    try {
+        $taskName = ($t -replace "^.*\\\\", "")
+        $taskObj = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($taskObj) {
+            Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+            Write-Host "  [-] Da vo hieu hoa Task: $taskName"
+        }
+    } catch {}
+}
+
+Write-Host ""
+Write-Host "====================================================================" -ForegroundColor Green
+Write-Host "[+] THANH CONG! Da dong bang hoan toan cap nhat Office." -ForegroundColor Green
+Write-Host "    Phien ban hien tai se duoc giu nguyen tuyet doi, tranh mat ban quyen." -ForegroundColor Green
+Write-Host "====================================================================" -ForegroundColor Green
 `;
 }
 
-
-// Office Quick Repair Script (PowerShell / CMD)
+// 14. Office Quick Repair Script (Detects Real Platform & Culture, Runs Elevated)
 export function generateOfficeQuickRepairScript(): string {
   return `# PowerShell script to run Microsoft Office Click-to-Run Quick Repair
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$c2rPath = "$env:CommonProgramFiles\\microsoft shared\\ClickToRun\\OfficeClickToRun.exe"
-$c2rPathx86 = "$env:CommonProgramFiles(x86)\\microsoft shared\\ClickToRun\\OfficeClickToRun.exe"
-
 Write-Host "====================================================================" -ForegroundColor Cyan
-Write-Host "      KÍCH HOẠT QUỐC GIA MICROSOFT OFFICE QUICK REPAIR              " -ForegroundColor Cyan
+Write-Host "      KICH HOAT TRINH MICROSOFT OFFICE QUICK REPAIR CHINH HANG      " -ForegroundColor Cyan
 Write-Host "====================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-if (Test-Path $c2rPath) {
-    Write-Host "[*] Đang khởi chạy tiến trình Quick Repair của Microsoft Office (x64)..." -ForegroundColor Yellow
-    Start-Process -FilePath $c2rPath -ArgumentList "scenario=Repair platform=x64 culture=en-us RepairType=QuickRepair DisplayLevel=True"
-    Write-Host "[+] Đã kích hoạt cửa sổ Quick Repair chính hãng Microsoft thành công!" -ForegroundColor Green
-} elseif (Test-Path $c2rPathx86) {
-    Write-Host "[*] Đang khởi chạy tiến trình Quick Repair của Microsoft Office (x86)..." -ForegroundColor Yellow
-    Start-Process -FilePath $c2rPathx86 -ArgumentList "scenario=Repair platform=x86 culture=en-us RepairType=QuickRepair DisplayLevel=True"
-    Write-Host "[+] Đã kích hoạt cửa sổ Quick Repair chính hãng Microsoft thành công!" -ForegroundColor Green
+Write-Host "[1/2] Dang phat hien cau hinh kien truc va ngon ngu Office cai dat..." -ForegroundColor Yellow
+$c2rReg = Get-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Office\\ClickToRun\\Configuration" -ErrorAction SilentlyContinue
+
+$platform = "x64"
+if ($c2rReg -and $c2rReg.Platform) {
+    $platform = $c2rReg.Platform
+} elseif ([IntPtr]::Size -eq 4) {
+    $platform = "x86"
+}
+
+$culture = "en-us"
+if ($c2rReg -and $c2rReg.ClientCulture) {
+    $culture = $c2rReg.ClientCulture
+}
+
+Write-Host "  [-] Nen tang phat hien: $platform"
+Write-Host "  [-] Ngon ngu phat hien: $culture"
+
+Write-Host "[2/2] Dang tim kiem tien trinh OfficeClickToRun.exe..." -ForegroundColor Yellow
+$possiblePaths = @(
+    "$env:CommonProgramFiles\\microsoft shared\\ClickToRun\\OfficeClickToRun.exe",
+    "\${env:CommonProgramFiles(x86)}\\microsoft shared\\ClickToRun\\OfficeClickToRun.exe",
+    "C:\\Program Files\\Common Files\\microsoft shared\\ClickToRun\\OfficeClickToRun.exe",
+    "C:\\Program Files (x86)\\Common Files\\microsoft shared\\ClickToRun\\OfficeClickToRun.exe"
+)
+
+$c2rExe = $possiblePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($c2rExe) {
+    Write-Host "  [-] Khoi chay: $c2rExe scenario=Repair platform=$platform culture=$culture RepairType=QuickRepair" -ForegroundColor Yellow
+    Start-Process -FilePath $c2rExe -ArgumentList "scenario=Repair platform=$platform culture=$culture RepairType=QuickRepair DisplayLevel=True"
+    Write-Host ""
+    Write-Host "====================================================================" -ForegroundColor Green
+    Write-Host "[+] THANH CONG! Cua so Quick Repair cua Microsoft da duoc mo." -ForegroundColor Green
+    Write-Host "====================================================================" -ForegroundColor Green
 } else {
-    Write-Host "[!] Không tìm thấy trình OfficeClickToRun.exe trực tiếp. Đang mở Control Panel AppWiz..." -ForegroundColor Yellow
+    Write-Host "[!] Khong tim thay OfficeClickToRun.exe. Dang mo Control Panel Programs..." -ForegroundColor Yellow
     & control appwiz.cpl
 }
 `;
