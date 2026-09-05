@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Download, X, RefreshCw } from 'lucide-react';
 
 export default function AutoUpdater() {
@@ -9,57 +9,84 @@ export default function AutoUpdater() {
   const [downloaded, setDownloaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const checkForUpdate = useCallback(async () => {
-    try {
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const update = await check();
-      if (update) {
-        setUpdateInfo({
-          version: update.version || '?',
-          notes: update.body || '',
-        });
-      }
-    } catch {
-      // silently ignore — updater not configured or no update
-    }
-  }, []);
+  useEffect(() => {
+    const api: any = (window as any).electronAPI;
 
-  const downloadAndInstall = useCallback(async () => {
-    try {
-      setDownloading(true);
-      setProgress(0);
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const update = await check();
-      if (update) {
-        await update.downloadAndInstall((downloadProgress) => {
-          if ('dataLength' in downloadProgress && 'chunkLength' in downloadProgress) {
-            const pct = Math.round((downloadProgress.dataLength / (downloadProgress.chunkLength || 1)) * 100);
-            setProgress(Math.min(pct, 100));
-          }
+    // For quản lý vòng đời error-banner (tự tắt sau 10s).
+    let errorTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearErrorSoon = () => {
+      if (errorTimer) clearTimeout(errorTimer);
+      errorTimer = setTimeout(() => setError(null), 10000);
+    };
+
+    // Lắng nghe sự kiện từ portable flow qua bridge.
+    const off = api?.onUpdaterEvent?.((event: any) => {
+      if (event.type === 'update-available') {
+        setUpdateInfo({
+          version: event.info?.latestVersion || '?',
+          notes: event.info?.releaseNotes || '',
         });
+      } else if (event.type === 'download-progress') {
+        setDownloading(true);
+        setProgress(Math.round(event.progress?.percent ?? 0));
+      } else if (event.type === 'update-downloaded') {
         setDownloading(false);
         setDownloaded(true);
         setProgress(100);
+      } else if (event.type === 'error') {
+        setDownloading(false);
+        setError(event.error || 'Lỗi khi cập nhật.');
+        clearErrorSoon();
       }
+    });
+
+    // Auto kiểm tra bản mới sau 5s. KHÔNG nuốt lỗi im lặng — báo rõ.
+    const timer = setTimeout(async () => {
+      try {
+        await api?.checkForUpdates?.();
+      } catch (e: any) {
+        setError(e?.message || 'Không thể kiểm tra bản cập nhật (kiểm tra kết nối mạng / endpoint).');
+        clearErrorSoon();
+      }
+    }, 5000);
+
+    return () => {
+      off?.();
+      clearTimeout(timer);
+      if (errorTimer) clearTimeout(errorTimer);
+    };
+  }, []);
+
+  const downloadAndInstall = async () => {
+    const api: any = (window as any).electronAPI;
+    try {
+      setDownloading(true);
+      setProgress(0);
+      const res = await api?.downloadUpdate?.();
+      // Nếu gọi download trả về hasUpdate:false (đã có bản mới nhất giữa chừng) thì bỏ.
+      if (res && res.hasUpdate === false) {
+        setDownloading(false);
+        setUpdateInfo(null);
+        return;
+      }
+      // Tiến trình/hoàn tất đến từ event update-available/download-progress/update-downloaded
+      // (trong trường hợp downloadUpdate() không throw, `downloaded` sẽ được set bởi
+      // sự kiện 'update-downloaded').
     } catch (e: any) {
       setDownloading(false);
-      setError(e?.message || 'Lỗi khi tải bản cập nhật');
+      setError(e?.message || 'Lỗi khi tải bản cập nhật.');
     }
-  }, []);
+  };
 
-  const relaunchApp = useCallback(async () => {
+  const relaunchApp = async () => {
+    const api: any = (window as any).electronAPI;
     try {
-      const { relaunch } = await import('@tauri-apps/plugin-process');
-      await relaunch();
-    } catch {
-      window.location.reload();
+      // portable_update_apply: swap <exe>.next → <exe>, relaunch app mới, exit hiện tại.
+      await api?.installUpdate?.();
+    } catch (e: any) {
+      setError(e?.message || 'Không thể áp dụng bản cập nhật.');
     }
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(checkForUpdate, 5000);
-    return () => clearTimeout(timer);
-  }, [checkForUpdate]);
+  };
 
   if (dismissed || error) {
     if (error) {

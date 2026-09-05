@@ -42,6 +42,22 @@ const translateFieldValue = (str) => {
   return translated;
 };
 
+// Tooltip dictionary chuẩn ngắn gọn (Tối đa 2 câu) - đồng bộ với OfficeLicenseAnalyzer
+const TOOLTIPS: Record<string, string> = {
+  OA3: 'OEM Activation 3.0 - Khóa bản quyền gốc nhúng sẵn trong chip BIOS/UEFI từ nhà sản xuất thiết bị.',
+  GenericKey: 'Khóa mặc định của Microsoft dùng làm cầu nối kích hoạt bản quyền số (HWID) hoặc KMS.',
+  HWID: 'Hardware ID - Bản quyền kỹ thuật số (Digital License) liên kết vĩnh viễn với phần cứng máy tính.',
+  KMS: 'Key Management Service - Máy chủ quản lý và cấp phép bản quyền nội bộ doanh nghiệp theo chu kỳ.',
+  KMS38: 'Cơ chế gia hạn kích hoạt KMS tới năm 2038 thông qua vé WPA, thường ghi nhận trên các bản Windows IoT Enterprise hoặc công cụ kích hoạt tự động.',
+  GVLK: 'Generic Volume License Key - Khóa mặc định dùng để định tuyến kích hoạt về máy chủ KMS.',
+  NoGenTicket: 'Khóa Registry chặn Windows tự động tạo vé kích hoạt bản quyền kỹ thuật số.',
+  Retail: 'Bản quyền bán lẻ cá nhân, kích hoạt trực tiếp theo tài khoản hoặc key độc lập.',
+  OEM: 'Bản quyền nhúng sẵn theo máy từ nhà sản xuất thiết bị (không chuyển nhượng sang máy khác).',
+  Volume: 'Giấy phép khối dành cho cơ quan, tổ chức hoặc doanh nghiệp triển khai hàng loạt.',
+  IFEO: 'Image File Execution Options - Khóa Registry điều hướng tiến trình ứng dụng Windows.',
+  SPP: 'Software Protection Platform - Dịch vụ của Windows chịu trách nhiệm xác thực và quản lý giấy phép.'
+};
+
 // Normalize IPC scan payloads from different backend response shapes
 const normalizeScanActivationResult = (raw: any): any => {
   if (raw === null || raw === undefined) return null;
@@ -267,6 +283,28 @@ export default function LicenseManager() {
   const [evidenceSortBy, setEvidenceSortBy] = useState<'id' | 'status' | 'weight'>('id');
   const [expandedEvidence, setExpandedEvidence] = useState<number[]>([]);
   const [showStepDeveloperView, setShowStepDeveloperView] = useState(false);
+  const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
+
+  const renderTooltipIcon = (term: string, tooltipKey?: string) => {
+    const key = tooltipKey || term;
+    const text = TOOLTIPS[key];
+    if (!text) return null;
+    return (
+      <span className="relative inline-flex items-center ml-1 cursor-pointer group">
+        <Info 
+          className="w-3.5 h-3.5 text-slate-400 hover:text-emerald-400 transition-colors"
+          onMouseEnter={() => setActiveTooltip(key)}
+          onMouseLeave={() => setActiveTooltip(null)}
+        />
+        {activeTooltip === key && (
+          <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-60 p-2 bg-slate-900 text-white text-[11px] font-normal rounded-lg shadow-xl z-50 pointer-events-none whitespace-normal leading-tight border border-slate-700">
+            <strong className="text-emerald-400 block mb-0.5">{term}:</strong>
+            {text}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   // Scoped usability states (Console, Timeline Expansion, Reset Modal)
   const [consoleLogs, setConsoleLogs] = useState<string[]>([
@@ -668,10 +706,14 @@ export default function LicenseManager() {
 
     const officeProducts = result.Office?.Products || [];
     const isLicensed = officeProducts.some((op: any) => op.LicenseStatus === 1);
+    const isNotification = officeProducts.some((op: any) => op.LicenseStatus === 5);
     
     if (isLicensed) {
         newSteps[0].status = 'clean';
         newSteps[0].details.push('✅ Đã kích hoạt (Licensed)');
+    } else if (isNotification) {
+        newSteps[0].status = 'warning';
+        newSteps[0].details.push('⚠️ Office có giấy phép nhưng Grace Period đã hết - Đang ở chế độ thông báo');
     } else {
         newSteps[0].status = 'warning';
         newSteps[0].details.push('⚠️ Chưa được kích hoạt');
@@ -739,6 +781,8 @@ export default function LicenseManager() {
 
     if (hasTamperingEvidence) {
       finalStatus = 'KMS';
+    } else if (isNotification) {
+      finalStatus = 'Cảnh báo';
     } else if (hasWarning) {
       if (isLicensed) finalStatus = 'Cảnh báo';
       else finalStatus = 'None';
@@ -749,7 +793,7 @@ export default function LicenseManager() {
     }
     
     newSteps[7].status = (finalStatus === 'Genuine' || finalStatus === 'None') ? 'clean' : (finalStatus === 'Cảnh báo' ? 'warning' : 'danger');
-    newSteps[7].details.push(`Kết luận: ${finalStatus === 'Genuine' ? 'Bản quyền hợp lệ' : finalStatus === 'KMS' ? 'Có dấu hiệu bất thường' : finalStatus === 'Cảnh báo' ? 'Cần xem xét thêm' : 'Chưa kích hoạt'}`);
+    newSteps[7].details.push(`Kết luận: ${finalStatus === 'Genuine' ? 'Bản quyền hợp lệ' : finalStatus === 'KMS' ? 'Có dấu hiệu bất thường' : finalStatus === 'Cảnh báo' ? 'Cần xem xét thêm (Office có giấy phép nhưng Grace Period đã hết)' : 'Chưa kích hoạt'}`);
     
     setOfficeSteps(newSteps);
   }
@@ -1088,6 +1132,63 @@ export default function LicenseManager() {
                   const partialKeyStr = winData?.PartialProductKey ? `***-${winData.PartialProductKey}` : 'Generic Key';
                   const isMasOrHwid = !hasOA3Win && isLicensedWin;
 
+                  // Phân tích bước cảnh báo/nguy hiểm để gọi đích danh (tương tự Office UI)
+                  const warningSteps = windowsSteps.filter(s => s.id !== 8 && s.status === 'warning');
+                  const dangerSteps = windowsSteps.filter(s => s.id !== 8 && s.status === 'danger');
+                  const hasWarningStep = warningSteps.length > 0;
+                  const hasDangerStep = dangerSteps.length > 0;
+
+                  const getConfidenceLabel = () => {
+                    if (hasDangerStep) {
+                      const names = dangerSteps.map(s => s.name).join(', ');
+                      return `(Có vấn đề • ${names}: Nguy cơ)`;
+                    }
+                    if (hasWarningStep) {
+                      const names = warningSteps.map(s => s.name).join(', ');
+                      return `(Ổn định • ${names}: Cần xác minh)`;
+                    }
+                    if (windowsConfidence >= 90) return '(Máy sạch)';
+                    if (windowsConfidence >= 60) return '(Cần xem xét)';
+                    return '(Có vấn đề)';
+                  };
+
+                  const confidenceColorClass = hasDangerStep
+                    ? 'text-rose-400'
+                    : hasWarningStep
+                    ? 'text-amber-400'
+                    : windowsConfidence >= 90
+                    ? 'text-emerald-400'
+                    : windowsConfidence >= 60
+                    ? 'text-amber-400'
+                    : 'text-rose-400';
+
+                  // Phân tích điều kiện hiển thị ghi chú giải thích (Ưu tiên 3)
+                  // Tình huống 1: Khóa BIOS (OA3) khác Khóa đang cài đặt (Installed Key)
+                  const rawBiosKey = String(winData?.OA3Key || winData?.OA3xOriginalProductKey || '').trim();
+                  const rawInstalledKey = String(winData?.InstalledKey || winData?.PartialProductKey || '').trim();
+                  const biosSuffix = rawBiosKey.length >= 5 ? rawBiosKey.slice(-5).toUpperCase() : rawBiosKey.toUpperCase();
+                  const installedSuffix = rawInstalledKey.length >= 5 ? rawInstalledKey.slice(-5).toUpperCase() : rawInstalledKey.toUpperCase();
+                  const isKeyMismatch = Boolean(
+                    hasOA3Win &&
+                    biosSuffix &&
+                    installedSuffix &&
+                    biosSuffix !== 'N/A' &&
+                    installedSuffix !== 'N/A' &&
+                    biosSuffix !== 'KHÔNG CÓ DỮ LIỆU' &&
+                    installedSuffix !== 'KHÔNG CÓ DỮ LIỆU' &&
+                    biosSuffix !== installedSuffix
+                  );
+                  const biosKeyDisplay = rawBiosKey.startsWith('***') ? rawBiosKey : `***${biosSuffix}`;
+                  const installedKeyDisplay = rawInstalledKey.startsWith('***') ? rawInstalledKey : `***${installedSuffix}`;
+
+                  // Tình huống 2: KMS38 (Windows Settings báo "digital license" do vé WPA trong khi slmgr/tool báo VOLUME_KMSCLIENT hết hạn năm 2038)
+                  const isKms38Detected = Boolean(
+                    sysData?.IsKMS38 === true ||
+                    winData?.Channel?.includes('KMS38') ||
+                    winData?.ProductKeyChannel?.includes('KMS38') ||
+                    windowsSteps.some(s => s.details.some(d => d.includes('KMS38') || d.includes('2038')))
+                  );
+
                   return (
                     <div className="space-y-4">
                       {/* Top Indicator Status Bar */}
@@ -1101,20 +1202,27 @@ export default function LicenseManager() {
                           </div>
                           <div className="flex items-center gap-1.5 font-bold">
                             <span className="text-slate-400 font-normal">Khôi phục:</span>
-                            <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                            <span className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 border border-blue-500/30 inline-flex items-center">
                               {hasOA3Win ? 'Có thể khôi phục bằng OEM BIOS' : 'Không cần thiết'}
+                              {hasOA3Win && renderTooltipIcon('OA3')}
                             </span>
                           </div>
                           <div className="flex items-center gap-1.5 font-bold">
                             <span className="text-slate-400 font-normal">Phương thức:</span>
-                            <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                            <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-400 border border-purple-500/30 inline-flex items-center">
                               {hasOA3Win ? 'OEM BIOS Key' : isMasOrHwid ? `Giấy phép số HWID (${partialKeyStr})` : (winData?.ProductKeyChannel || 'Volume KMS')}
+                              {hasOA3Win ? renderTooltipIcon('OA3') : isMasOrHwid ? renderTooltipIcon('HWID') : renderTooltipIcon('KMS')}
                             </span>
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-slate-400">Độ tin cậy hệ thống:</span>
-                          <span className={`font-black text-sm ${windowsConfidence >= 90 ? 'text-emerald-400' : windowsConfidence >= 60 ? 'text-amber-400' : 'text-rose-400'}`}>{windowsConfidence}% ({windowsConfidence >= 90 ? 'Máy sạch' : windowsConfidence >= 60 ? 'Cần xem xét' : 'Có vấn đề'})</span>
+                          <span className={`font-black text-sm ${confidenceColorClass}`}>
+                            {windowsConfidence}%
+                          </span>
+                          <span className={`text-[11px] font-medium ${hasDangerStep ? 'text-rose-400' : hasWarningStep ? 'text-amber-300' : 'text-slate-400'}`}>
+                            {getConfidenceLabel()}
+                          </span>
                         </div>
                       </div>
 
@@ -1127,12 +1235,13 @@ export default function LicenseManager() {
                               KẾT QUẢ XÁC MINH NGUỒN GỐC BẢN QUYỀN WINDOWS
                             </h4>
                           </div>
-                          <span className={`px-3 py-1 rounded-full text-[11px] font-bold border uppercase tracking-wider ${
+                          <span className={`px-3 py-1 rounded-full text-[11px] font-bold border uppercase tracking-wider inline-flex items-center ${
                             hasOA3Win 
                               ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' 
                               : 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
                           }`}>
                             {hasOA3Win ? 'CHÍNH HÃNG FACTORY OEM (BIOS KEY)' : 'NGUỒN KÍCH HOẠT CẦN XÁC MINH THÊM (HWID / GENERIC KEY)'}
+                            {hasOA3Win ? renderTooltipIcon('OA3') : renderTooltipIcon('HWID')}
                           </span>
                         </div>
 
@@ -1145,17 +1254,23 @@ export default function LicenseManager() {
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center font-bold text-[10px]">2</span>
-                            <span>Kiểm tra Key BIOS ({hasOA3Win ? 'Có Key' : 'Không có'})</span>
+                            <span className="inline-flex items-center">
+                              Kiểm tra Key BIOS ({hasOA3Win ? 'Có Key' : 'Không có'})
+                              {renderTooltipIcon('OA3')}
+                            </span>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center font-bold text-[10px]">3</span>
-                            <span>Phân tích Generic Key ({partialKeyStr})</span>
+                            <span className="inline-flex items-center">
+                              Phân tích Generic Key ({partialKeyStr})
+                              {renderTooltipIcon('GenericKey')}
+                            </span>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                           <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="w-5 h-5 rounded-full bg-cyan-500 text-slate-950 flex items-center justify-center font-bold text-[10px]">4</span>
-                            <span>Mức độ tin cậy ({windowsConfidence}% {windowsConfidence >= 90 ? 'Máy sạch' : windowsConfidence >= 60 ? 'Cần xem xét' : 'Có vấn đề'})</span>
+                            <span className={`w-5 h-5 rounded-full text-slate-950 flex items-center justify-center font-bold text-[10px] ${hasDangerStep ? 'bg-rose-500' : hasWarningStep ? 'bg-amber-500' : 'bg-cyan-500'}`}>4</span>
+                            <span className={confidenceColorClass}>Mức độ tin cậy ({windowsConfidence}% {getConfidenceLabel()})</span>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                           <div className="flex items-center gap-1.5 shrink-0 font-bold text-slate-200">
@@ -1170,7 +1285,7 @@ export default function LicenseManager() {
                             CẤP ĐỘ XÁC MINH BẢN QUYỀN &amp; CHỨNG TỪ KÈM THEO:
                           </div>
                           <p className="text-xs text-slate-400 leading-relaxed">
-                            Trạng thái ghi nhận <strong className="text-emerald-400">LICENSED ({hasOA3Win ? 'OEM BIOS' : 'Giấy phép số HWID'})</strong>. Hệ thống KHÔNG phát hiện các công cụ bẻ khóa hoặc tệp tin bị thay đổi ngầm (Máy sạch 100%). Khi cần đối soát bản quyền với cơ quan kiểm tra, bạn có thể lưu giữ các chứng từ sau:
+                            Trạng thái ghi nhận <strong className="text-emerald-400">LICENSED ({hasOA3Win ? 'OEM BIOS' : 'Giấy phép số HWID'})</strong>. {hasWarningStep ? `Hệ thống ghi nhận trạng thái ổn định nhưng có bước cần xác minh: ${warningSteps.map(s => s.name).join(', ')}.` : hasDangerStep ? `Hệ thống ghi nhận dấu hiệu bất thường cần kỹ thuật viên xử lý: ${dangerSteps.map(s => s.name).join(', ')}.` : 'Hệ thống KHÔNG phát hiện các công cụ bẻ khóa hoặc tệp tin bị thay đổi ngầm (Máy sạch 100%).'} Khi cần đối soát bản quyền với cơ quan kiểm tra, bạn có thể lưu giữ các chứng từ sau:
                           </p>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-300 font-mono">
                             <div className="p-2 bg-[#131d33] rounded-lg border border-slate-800">
@@ -1205,6 +1320,37 @@ export default function LicenseManager() {
                                 : 'Máy có Key bản quyền nhúng trực tiếp trong BIOS (OA3). Đây là bản quyền OEM nhà sản xuất chính hãng đi kèm máy.'}
                             </p>
                           </div>
+
+                          {/* GIẢI THÍCH TÌNH HUỐNG 1: KHÓA BIOS KHÁC KHÓA ĐANG CÀI (OEM vs Installed Key) */}
+                          {isKeyMismatch && (
+                            <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-xs text-blue-300 leading-relaxed space-y-1 font-sans">
+                              <div className="font-bold flex items-center gap-1.5 text-blue-400">
+                                <Info className="w-4 h-4 shrink-0" />
+                                <span>Ghi chú đối chiếu: Khóa BIOS khác Khóa đang cài đặt</span>
+                                {renderTooltipIcon('OA3')}
+                              </div>
+                              <p className="text-[11px] text-slate-300">
+                                Máy có khóa xuất xưởng trong BIOS ({biosKeyDisplay}) nhưng hiện đang chạy với khóa cài đặt khác ({installedKeyDisplay}). Đây là <strong>tình huống bình thường</strong> khi kỹ thuật viên hoặc người dùng cài lại hệ điều hành khác phiên bản xuất xưởng (ví dụ: nâng cấp từ Windows Home lên Pro bằng key riêng), hoàn toàn không phải lỗi đọc sai dữ liệu.
+                              </p>
+                            </div>
+                          )}
+
+                          {/* GIẢI THÍCH TÌNH HUỐNG 2: KMS38 (Cảnh báo kích hoạt trái phép & lý do Settings vẫn hiện digital license) */}
+                          {isKms38Detected && (
+                            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300 leading-relaxed space-y-1.5 font-sans">
+                              <div className="font-bold flex items-center gap-1.5 text-rose-400">
+                                <ShieldAlert className="w-4 h-4 shrink-0" />
+                                <span>Cảnh báo: Phát hiện dấu hiệu kích hoạt trái phép qua cơ chế KMS38</span>
+                                {renderTooltipIcon('KMS38')}
+                              </div>
+                              <p className="text-[11px] text-slate-300">
+                                Hệ thống phát hiện máy đang sử dụng phương thức bẻ khóa <strong className="text-rose-400">KMS38</strong> (kênh <strong>VOLUME_KMSCLIENT</strong> với thời hạn cưỡng ép kéo dài tới năm 2038).
+                              </p>
+                              <p className="text-[11px] text-slate-300">
+                                <strong>Tại sao Windows Settings vẫn báo xanh &quot;digital license&quot;?</strong> Bản chất kỹ thuật của KMS38 là can thiệp tạo vé kích hoạt WPA giả lập trong dịch vụ bảo vệ bản quyền SPP, đánh lừa Windows nhận diện hệ thống đã có giấy phép số. Giao diện Windows Settings chỉ đọc cờ trạng thái vé tổng quan nên vẫn hiển thị hợp lệ, nhưng thực chất đây là kích hoạt không chính ngạch và có nguy cơ lỗi hệ thống hoặc mất bản quyền khi Windows cập nhật.
+                              </p>
+                            </div>
+                          )}
                         </div>
 
                         {/* 4 Bottom Summary Cards */}
@@ -1215,11 +1361,17 @@ export default function LicenseManager() {
                           </div>
                           <div className="p-3 bg-[#0e1626] rounded-xl border border-slate-800">
                             <span className="text-[10px] font-bold text-slate-500 uppercase block">Phương thức</span>
-                            <span className="font-bold text-slate-200">{hasOA3Win ? 'OEM BIOS' : 'Giấy phép số (HWID)'}</span>
+                            <span className="font-bold text-slate-200 inline-flex items-center">
+                              {hasOA3Win ? 'OEM BIOS' : 'Giấy phép số (HWID)'}
+                              {hasOA3Win ? renderTooltipIcon('OEM') : renderTooltipIcon('HWID')}
+                            </span>
                           </div>
                           <div className="p-3 bg-[#0e1626] rounded-xl border border-slate-800">
                             <span className="text-[10px] font-bold text-slate-500 uppercase block">Key BIOS OA3</span>
-                            <span className="font-bold text-emerald-400">{hasOA3Win ? `Có (${winData?.OA3Key || 'OA3 Key'})` : 'Chưa tìm thấy'}</span>
+                            <span className="font-bold text-emerald-400 inline-flex items-center">
+                              {hasOA3Win ? `Có (${winData?.OA3Key || 'OA3 Key'})` : 'Chưa tìm thấy'}
+                              {renderTooltipIcon('OA3')}
+                            </span>
                           </div>
                           <div className="p-3 bg-[#0e1626] rounded-xl border border-slate-800">
                             <span className="text-[10px] font-bold text-slate-500 uppercase block">Độ tin cậy nguồn</span>
@@ -1248,11 +1400,20 @@ export default function LicenseManager() {
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
                     <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>Khóa sản phẩm:</b> <span className="text-slate-400 font-mono">{displayValue(winData?.ProductKey) || 'Không có dữ liệu'}</span></div>
                     <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>Khóa một phần:</b> <span className="text-slate-400 font-mono">{displayValue(winData?.PartialProductKey) || 'Không có dữ liệu'}</span></div>
-                    <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>Khóa BIOS:</b> <span className="text-emerald-400 font-mono">{displayValue(winData?.OA3Key) || 'Không có dữ liệu'}</span></div>
+                    <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300 flex items-center justify-between">
+                      <div><b>Khóa BIOS:</b> <span className="text-emerald-400 font-mono">{displayValue(winData?.OA3Key) || 'Không có dữ liệu'}</span></div>
+                      {renderTooltipIcon('OA3')}
+                    </div>
                     <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>Khóa đã cài đặt:</b> <span className="text-slate-400 font-mono">{displayValue(winData?.InstalledKey) || 'Không có dữ liệu'}</span></div>
-                    <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>Kênh cấp phép:</b> <span className="text-slate-400">{displayValue(winData?.ProductKeyChannel || winData?.Channel) || 'Không có dữ liệu'}</span></div>
+                    <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300 flex items-center justify-between">
+                      <div><b>Kênh cấp phép:</b> <span className="text-slate-400">{displayValue(winData?.ProductKeyChannel || winData?.Channel) || 'Không có dữ liệu'}</span></div>
+                      {renderTooltipIcon('Volume')}
+                    </div>
                     <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>ID kích hoạt:</b> <span className="text-slate-400 font-mono text-[10px]">{displayValue(winData?.ActivationId) || 'Không có dữ liệu'}</span></div>
-                    <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>KMS Host:</b> <span className="text-slate-400 font-mono">{displayValue(winData?.KeyManagementServiceMachine) || 'Không có dữ liệu'}</span></div>
+                    <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300 flex items-center justify-between">
+                      <div><b>KMS Host:</b> <span className="text-slate-400 font-mono">{displayValue(winData?.KeyManagementServiceMachine) || 'Không có dữ liệu'}</span></div>
+                      {renderTooltipIcon('KMS')}
+                    </div>
                     <div className="p-2 bg-[#0e1626] border border-slate-800 rounded-lg text-slate-300"><b>KMS Port:</b> <span className="text-slate-400 font-mono">{displayValue(winData?.KeyManagementServicePort) || 'Không có dữ liệu'}</span></div>
                   </div>
                 </div>

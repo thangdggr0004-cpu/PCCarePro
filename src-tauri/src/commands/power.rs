@@ -5,6 +5,7 @@ use crate::commands::exec;
 const GUID_BALANCED: &str = "381b4222-f694-41f0-9685-ff5bb260df2e";
 const GUID_HIGH_PERFORMANCE: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
 const GUID_POWER_SAVER: &str = "a1841308-3541-4fab-bc81-f71556f20b4a";
+const GUID_POWER_SAVER_ALT: &str = "961cc777-21a3-4279-8477-9a91373d0850";
 const GUID_ULTIMATE: &str = "e9a42b02-d5df-448d-aa00-03f14749eb61";
 const GUID_GAMING: &str = "2e2e98c4-30a1-4e5e-8dd5-8f5bf71f42f2";
 
@@ -36,10 +37,19 @@ pub fn set_power_plan(plan_name: &str) -> Result<(), String> {
     match plan_name {
         "balanced" => run_powercfg(&["/setactive", GUID_BALANCED]),
         "performance" => run_powercfg(&["/setactive", GUID_HIGH_PERFORMANCE]),
-        "battery" => run_powercfg(&["/setactive", GUID_POWER_SAVER]),
+        "battery" => {
+            if power_list_has(GUID_POWER_SAVER)? {
+                run_powercfg(&["/setactive", GUID_POWER_SAVER])
+            } else if power_list_has(GUID_POWER_SAVER_ALT)? {
+                run_powercfg(&["/setactive", GUID_POWER_SAVER_ALT])
+            } else {
+                let _ = run_powercfg(&["/duplicatescheme", GUID_POWER_SAVER, GUID_POWER_SAVER]);
+                run_powercfg(&["/setactive", GUID_POWER_SAVER])
+            }
+        }
         "ultimate" => {
             if !power_list_has(GUID_ULTIMATE)? {
-                run_powercfg(&["/duplicatescheme", GUID_ULTIMATE])?;
+                let _ = run_powercfg(&["/duplicatescheme", GUID_ULTIMATE, GUID_ULTIMATE]);
             }
             run_powercfg(&["/setactive", GUID_ULTIMATE])
         }

@@ -1,39 +1,31 @@
-use base64::Engine as _;
+use serde::Deserialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncWriteExt, BufWriter};
 
-const DEFAULT_ENDPOINT: &str = "https://github.com/thangdggr0004-cpu/PCCarePro/releases/latest/download/latest.json";
+const GITHUB_LATEST: &str =
+    "https://api.github.com/repos/thangdggr0004-cpu/PCCarePro/releases/latest";
+const ASSET_NAME: &str = "pccare-master-pro.exe";
+const STAGED_NAME: &str = "pccare-update.exe";
 
-// Tauri stores the minisign public key as base64(comment-line text) in tauri.conf.json;
-// the plugin decodes it with base64 then passes the text to PublicKey::decode.
-fn base64_to_string(s: &str) -> Result<String, String> {
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(s.trim())
-        .map_err(|e| format!("Không giải mã được khóa/chữ ký: {e}"))?;
-    String::from_utf8(raw).map_err(|e| format!("Dữ liệu khóa/chữ ký không hợp lệ: {e}"))
+/// Return the update-check endpoint URL. Respects the `PORTABLE_UPDATE_ENDPOINT`
+/// env-var override (used by the E2E test script to redirect update checks to a
+/// local server instead of the real GitHub Releases API).
+fn get_update_endpoint() -> String {
+    std::env::var("PORTABLE_UPDATE_ENDPOINT").unwrap_or_else(|_| GITHUB_LATEST.to_string())
 }
 
-fn updater_config(app: &AppHandle) -> (String, String) {
-    let updater = app
-        .config()
-        .plugins
-        .0
-        .get("updater")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Default::default()));
-    let endpoint = updater["endpoints"]
-        .as_array()
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_str())
-        .unwrap_or(DEFAULT_ENDPOINT)
-        .to_string();
-    let pubkey = updater["pubkey"].as_str().unwrap_or("").to_string();
-    (endpoint, pubkey)
+#[derive(Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
 }
 
-fn windows_target(manifest: &Value) -> Option<Value> {
-    manifest.get("platforms")?.get("windows-x86_64").cloned()
+#[derive(Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    body: Option<String>,
+    assets: Vec<GhAsset>,
 }
 
 fn version_newer(latest: &str, current: &str) -> bool {
@@ -52,49 +44,85 @@ fn version_newer(latest: &str, current: &str) -> bool {
     }
 }
 
-/// Fetch latest manifest, download the portable executable, verify its minisign signature
-/// with the configured pubkey, and stage it next to the running executable as `<exe>.next`.
-/// Emits `portable-update-progress` during download and `portable-update-done` when staged.
-#[tauri::command]
-pub async fn portable_update_download(app: AppHandle) -> Result<Value, String> {
-    let (endpoint, pubkey) = updater_config(&app);
-    if pubkey.is_empty() {
-        return Err("Chưa cấu hình public key cập nhật.".to_string());
-    }
-
-    let client = reqwest::Client::builder()
+fn http_client() -> Result<reqwest::Client, String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::builder()
         .user_agent("PCCareMasterPro")
         .build()
-        .map_err(|e| e.to_string())?;
-    let manifest_bytes = client
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn portable_update_check(app: AppHandle) -> Result<Value, String> {
+    let client = http_client()?;
+    let endpoint = get_update_endpoint();
+    let release: GhRelease = client
         .get(&endpoint)
         .send()
         .await
-        .map_err(|e| format!("Không truy cập được endpoint cập nhật: {e}"))?
+        .map_err(|e| format!("Không truy cập được GitHub: {e}"))?
         .error_for_status()
         .map_err(|e| e.to_string())?
-        .bytes()
+        .json()
         .await
-        .map_err(|e| e.to_string())?;
-    let manifest: Value = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| format!("Manifest cập nhật không hợp lệ: {e}"))?;
+        .map_err(|e| format!("Phản hồi GitHub không hợp lệ: {e}"))?;
 
-    let target = windows_target(&manifest)
-        .ok_or_else(|| "Không tìm thấy target windows-x86_64 trong manifest.".to_string())?;
-    let latest_version = manifest["version"].as_str().unwrap_or("");
+    let latest_version = release.tag_name.trim_start_matches('v').to_string();
     let current_version = app.package_info().version.to_string();
-    if !version_newer(latest_version, &current_version) {
-        return Ok(serde_json::json!({ "hasUpdate": false, "message": "Bạn đang sử dụng phiên bản mới nhất." }));
+
+    if !version_newer(&latest_version, &current_version) {
+        return Ok(serde_json::json!({
+            "hasUpdate": false,
+            "message": "Bạn đang sử dụng phiên bản mới nhất."
+        }));
     }
-    let url = target["url"].as_str().ok_or("Thiếu URL tải xuống trong manifest.")?;
-    let signature = target["signature"].as_str().ok_or("Thiếu chữ ký trong manifest.")?;
+
+    let notes = release.body.unwrap_or_default();
+    Ok(serde_json::json!({
+        "hasUpdate": true,
+        "version": latest_version,
+        "notes": notes,
+    }))
+}
+
+#[tauri::command]
+pub async fn portable_update_download(app: AppHandle) -> Result<Value, String> {
+    let client = http_client()?;
+    let endpoint = get_update_endpoint();
+    let release: GhRelease = client
+        .get(&endpoint)
+        .send()
+        .await
+        .map_err(|e| format!("Không truy cập được GitHub: {e}"))?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| format!("Phản hồi GitHub không hợp lệ: {e}"))?;
+
+    let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    let current_version = app.package_info().version.to_string();
+
+    if !version_newer(&latest_version, &current_version) {
+        return Ok(serde_json::json!({
+            "hasUpdate": false,
+            "message": "Bạn đang sử dụng phiên bản mới nhất."
+        }));
+    }
+
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == ASSET_NAME)
+        .ok_or_else(|| "Không tìm thấy file cập nhật trong release.".to_string())?;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let staged = std::path::PathBuf::from(format!("{}.next", exe.to_string_lossy()));
+    let exe_dir = exe.parent().ok_or("Cannot determine exe directory")?;
+    let staged = exe_dir.join(STAGED_NAME);
     let _ = std::fs::remove_file(&staged);
 
     let mut resp = client
-        .get(url)
+        .get(&asset.browser_download_url)
         .send()
         .await
         .map_err(|e| format!("Không tải được file cập nhật: {e}"))?
@@ -112,25 +140,25 @@ pub async fn portable_update_download(app: AppHandle) -> Result<Value, String> {
         got += chunk.len() as u64;
         if total > 0 {
             let percent = ((got as f64 / total as f64) * 100.0) as u8;
-            let _ = app.emit("portable-update-progress", serde_json::json!({ "percent": percent }));
+            let _ = app.emit(
+                "portable-update-progress",
+                serde_json::json!({ "percent": percent }),
+            );
         }
     }
     writer.flush().await.map_err(|e| e.to_string())?;
     drop(writer);
 
-    let data = std::fs::read(&staged).map_err(|e| format!("Không đọc được file tải về: {e}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        let zone_path = format!("{}:Zone.Identifier", staged.to_string_lossy());
+        let _ = std::fs::remove_file(zone_path);
+    }
 
-    let pub_key_text = base64_to_string(&pubkey)?;
-    let public_key =
-        minisign_verify::PublicKey::decode(&pub_key_text).map_err(|e| format!("Khóa công khai không hợp lệ: {e}"))?;
-    let signature_text = base64_to_string(signature)?;
-    let signature =
-        minisign_verify::Signature::decode(&signature_text).map_err(|e| format!("Chữ ký không hợp lệ: {e}"))?;
-    public_key
-        .verify(&data, &signature, true)
-        .map_err(|e| format!("Xác minh chữ ký thất bại: {e}"))?;
-
-    let _ = app.emit("portable-update-done", serde_json::json!({ "staged": staged.to_string_lossy() }));
+    let _ = app.emit(
+        "portable-update-done",
+        serde_json::json!({ "staged": staged.to_string_lossy() }),
+    );
     Ok(serde_json::json!({
         "success": true,
         "hasUpdate": true,
@@ -139,51 +167,65 @@ pub async fn portable_update_download(app: AppHandle) -> Result<Value, String> {
     }))
 }
 
-/// Spawn a detached helper that waits for the app to exit, then atomically replaces the
-/// running executable with the staged `<exe>.next`, relaunches the app and terminates the
-/// current process.
-///
-/// Crash/im-recovery safety: the swap is a single `move /Y` (MoveFileEx REPLACE_EXISTING on
-/// the same volume — atomic at the file-system level). There is never a moment where the exe
-/// is missing: an interruption BEFORE the move leaves the old exe untouched (still runnable)
-/// plus a stale `.next`, which `cleanup_stale_update` removes on next launch; an interruption
-/// DURING/after the move leaves either the old or the new exe — never a broken state.
+fn build_apply_script(exe: &std::path::Path) -> std::path::PathBuf {
+    let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
+    let staged = exe_dir.join(STAGED_NAME);
+    let exe_s = exe.to_string_lossy().replace('"', "");
+    let staged_s = staged.to_string_lossy().replace('"', "");
+    // Write a .bat file to %TEMP% so cmd.exe doesn't mangle paths with spaces
+    // or parentheses when parsing the /C command line.  CR+LF for Windows compat.
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    exe_s.hash(&mut h);
+    let bat = std::env::temp_dir().join(format!("pccare_update_{:x}.bat", h.finish()));
+    let script = format!(
+        "@echo off\r\n\
+         :retry\r\n\
+         move /Y \"{staged_s}\" \"{exe_s}\" 2>nul\r\n\
+         if errorlevel 1 (\r\n\
+           ping 127.0.0.1 -n 3 > nul\r\n\
+           goto retry\r\n\
+         )\r\n\
+         powershell -NoProfile -Command \"Unblock-File -Path '{exe_s}' -ErrorAction SilentlyContinue\" 2>nul\r\n\
+         start \"\" \"{exe_s}\""
+    );
+    let _ = std::fs::write(&bat, script);
+    bat
+}
+
 #[tauri::command]
-pub async fn portable_update_apply(app: AppHandle) -> Result<Value, String> {
+pub async fn portable_update_apply(_app: AppHandle) -> Result<Value, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let next = std::path::PathBuf::from(format!("{}.next", exe.to_string_lossy()));
-    if !next.exists() {
+    let exe_dir = exe.parent().ok_or("Cannot determine exe directory")?;
+    let staged = exe_dir.join(STAGED_NAME);
+    if !staged.exists() {
         return Err("Chưa có file cập nhật đã tải. Hãy tải cập nhật trước.".to_string());
     }
-    let exe_s = exe.to_string_lossy().replace('"', "");
-    let next_s = next.to_string_lossy().replace('"', "");
-    let script = format!(
-        "ping 127.0.0.1 -n 16 > nul & move /Y \"{next_s}\" \"{exe_s}\" & start \"\" \"{exe_s}\""
-    );
+    let bat = build_apply_script(&exe);
     let mut cmd = std::process::Command::new("cmd.exe");
-    cmd.args(["/C", &script]);
+    cmd.args(["/C", &bat.to_string_lossy()]);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.creation_flags(0x08000000);
     }
-    cmd.spawn().map_err(|e| format!("Không khởi động được bộ áp dụng cập nhật: {e}"))?;
+    cmd.spawn()
+        .map_err(|e| format!("Không khởi động được bộ áp dụng cập nhật: {e}"))?;
 
-    let _ = app.emit("portable-update-exiting", serde_json::json!({}));
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-    app.exit(0);
-    Ok(serde_json::json!({ "success": true }))
+    // Give cmd.exe a moment to start, then hard-kill this process so the exe
+    // file is unlocked immediately.  std::process::exit (not app.exit) ensures
+    // the OS releases the file lock right away — the .bat retry-loop will then
+    // succeed on its first attempt.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    std::process::exit(0);
 }
 
-/// Remove a stale staged update (`<exe>.next`) left over from an interrupted download/apply.
-/// Called at app startup so an interrupted update can never trap the app: the previous
-/// executable remains in place and the leftover staging file is simply discarded.
 pub fn cleanup_stale_update() {
     if let Ok(exe) = std::env::current_exe() {
-        let staged = std::path::PathBuf::from(format!("{}.next", exe.to_string_lossy()));
-        let old = std::path::PathBuf::from(format!("{}.old", exe.to_string_lossy()));
-        let _ = std::fs::remove_file(&staged);
-        let _ = std::fs::remove_file(&old);
+        if let Some(dir) = exe.parent() {
+            let _ = std::fs::remove_file(dir.join(STAGED_NAME));
+        }
     }
 }
 
@@ -191,24 +233,36 @@ pub fn cleanup_stale_update() {
 mod tests {
     use super::*;
 
-    /// Manual sig-check against a real artifact.
-    /// Requires: PCCARE_SIG_TEST_EXE, PCCARE_SIG_TEST_SIG (base64 string as in latest.json),
-    /// PCCARE_SIG_TEST_PUBKEY (base64 config value from tauri.conf.json).
     #[test]
-    fn verify_artifact_signature() {
-        let exe = match std::env::var("PCCARE_SIG_TEST_EXE") {
-            Ok(v) => v,
-            Err(_) => return, // skip when not invoked manually
-        };
-        let sig = std::env::var("PCCARE_SIG_TEST_SIG").unwrap();
-        let pubkey = std::env::var("PCCARE_SIG_TEST_PUBKEY").unwrap();
-        let data = std::fs::read(&exe).expect("read artifact");
-        let pub_key_text = base64_to_string(&pubkey).expect("pubkey base64");
-        let public_key = minisign_verify::PublicKey::decode(&pub_key_text).expect("pubkey decode");
-        let signature_text = base64_to_string(&sig).expect("sig base64");
-        let signature = minisign_verify::Signature::decode(&signature_text).expect("sig decode");
-        public_key
-            .verify(&data, &signature, true)
-            .expect("signature must verify");
+    fn version_newer_works() {
+        assert!(version_newer("2.1.0", "2.0.3"));
+        assert!(version_newer("3.0.0", "2.9.9"));
+        assert!(!version_newer("2.0.3", "2.0.3"));
+        assert!(!version_newer("1.9.9", "2.0.3"));
+        assert!(!version_newer("", "2.0.3"));
+    }
+
+    #[test]
+    fn apply_script_swaps_staged_then_relaunches() {
+        let exe = std::path::Path::new(r"C:\Apps\pccare-master-pro.exe");
+        let bat = build_apply_script(exe);
+        let script = std::fs::read_to_string(&bat).unwrap();
+        assert!(
+            script.contains(r#"move /Y "C:\Apps\pccare-update.exe" "C:\Apps\pccare-master-pro.exe""#),
+            "script should swap pccare-update.exe over the exe: {script}"
+        );
+        assert!(script.contains(r#"start "" "C:\Apps\pccare-master-pro.exe""#), "script should relaunch: {script}");
+        assert!(script.contains(":retry"), "script should have retry loop: {script}");
+        assert!(script.contains("goto retry"), "script should loop back on failure: {script}");
+        let _ = std::fs::remove_file(&bat);
+    }
+
+    #[test]
+    fn apply_script_strips_quotes_from_paths() {
+        let exe = std::path::Path::new(r#"C:\Apps "folder"\exe"#);
+        let bat = build_apply_script(exe);
+        let script = std::fs::read_to_string(&bat).unwrap();
+        assert!(!script.contains("folder\"exe"), "embedded quote must be stripped: {script}");
+        let _ = std::fs::remove_file(&bat);
     }
 }

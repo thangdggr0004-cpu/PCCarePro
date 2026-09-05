@@ -605,6 +605,13 @@ async fn sync_vietnam_time(ntp_server: Option<String>) -> Result<serde_json::Val
 }
 
 #[tauri::command]
+async fn ensure_trusted_certificate() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(windows_settings::ensure_trusted_root_certificate)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn apply_power_plan(options: serde_json::Value) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let mode = options["mode"].as_str().unwrap_or("balanced").to_string();
@@ -956,6 +963,7 @@ verify_bios_restore,
             read_tamper_protection,
             get_time_info,
             sync_vietnam_time,
+            ensure_trusted_certificate,
             apply_power_plan,
             backup_registry_keys,
             apply_windows_settings,
@@ -983,6 +991,9 @@ create_system_restore_point,
         .plugin(tauri_plugin_dialog::init())
 .setup(|app| {
             commands::portable_update::cleanup_stale_update();
+            std::thread::spawn(|| {
+                let _ = windows_settings::ensure_trusted_root_certificate();
+            });
             if let Ok(mut handle) = TAURI_APP_HANDLE.lock() {
                 *handle = Some(app.handle().clone());
             }

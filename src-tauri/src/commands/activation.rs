@@ -641,6 +641,9 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
                 } elseif ($dstatus -match "LICENSE STATUS:\s*---IN_GRACE_PERIOD---") { 
                     $licData.licenseStatus = "GRACE"
                     $licData.activationState = "GRACE_PERIOD" 
+                } elseif ($dstatus -match "LICENSE STATUS:\s*---NOTIFICATIONS---") { 
+                    $licData.licenseStatus = "NOTIFICATION"
+                    $licData.activationState = "NOTIFICATION" 
                 } elseif ($dstatus -match "LICENSE STATUS:") { 
                     $licData.licenseStatus = "UNLICENSED"
                     $licData.activationState = "UNLICENSED" 
@@ -663,6 +666,13 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
             if ($wmiProd.LicenseStatus -eq 1) { 
                 $licData.licenseStatus = "LICENSED"
                 $licData.activationState = "LICENSED" 
+            } elseif ($wmiProd.LicenseStatus -eq 5) { 
+                # LicenseStatus 5 = Notification (grace expired, Office runs with nag)
+                $licData.licenseStatus = "NOTIFICATION"
+                $licData.activationState = "NOTIFICATION" 
+            } elseif ($wmiProd.LicenseStatus -eq 2 -or $wmiProd.LicenseStatus -eq 3 -or $wmiProd.LicenseStatus -eq 4) { 
+                $licData.licenseStatus = "GRACE"
+                $licData.activationState = "GRACE_PERIOD" 
             }
             if ($wmiProd.PartialProductKey -and $licData.partialKey -eq "N/A") { $licData.partialKey = $wmiProd.PartialProductKey }
             if ($wmiProd.Name -and $licData.licenseName -eq "N/A") { $licData.licenseName = $wmiProd.Name }
@@ -1090,6 +1100,12 @@ pub fn scan_office_activation() -> Result<serde_json::Value, String> {
         $provenanceConfidence = 90
         $recommendationText = "Kích hoạt bản quyền trước khi hết thời gian gia hạn."
         [void]$evidenceUsed.Add("Đang trong thời gian gia hạn dùng thử (Grace: $($licData.gracePeriod)).")
+    } elseif ($actStatus -eq "NOTIFICATION") {
+        $actMethod = "Thông Báo Hết Hạn (Grace Expired)"
+        $actSource = "Licensed — Grace Period Expired"
+        $provenanceConfidence = 75
+        $recommendationText = "Giấy phép đã hết hạn grace period. Office vẫn hoạt động ở chế độ thông báo. Hãy kích hoạt lại bằng MAK key hoặc mua license mới."
+        [void]$evidenceUsed.Add("Office có giấy phép nhưng grace period đã hết (LicenseStatus: Notification). Key: $($licData.partialKey)")
     }
 
     # 4-LEVEL ENTERPRISE EVIDENCE-BASED ACTIVATION ASSESSMENT ENGINE

@@ -182,7 +182,8 @@ pub fn apply_windows_settings(state: serde_json::Value) -> Result<(), String> {
         ps.push_str("Set-WinUserLanguageList -LanguageList 'en-US', 'vi' -Force -ErrorAction SilentlyContinue\n");
     }
 
-    exec::run_ps_elevated(&ps).map(|_| ())
+    exec::run_ps_elevated(&ps)?;
+    restart_explorer()
 }
 
 /// Apply Taskbar settings (Card 2). Parity 1:1 with Electron `apply-taskbar-settings`
@@ -444,7 +445,8 @@ public class StandbyListPurge {
     if ps.is_empty() {
         return Ok(());
     }
-    exec::run_ps_elevated(&ps).map(|_| ())
+    exec::run_ps_elevated(&ps)?;
+    restart_explorer()
 }
 
 /// Restore advanced optimization to defaults. Parity 1:1 with Electron
@@ -493,7 +495,8 @@ pub fn restore_advanced_optimization() -> Result<(), String> {
         "$adapters = Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\*' -ErrorAction SilentlyContinue\nforeach ($a in $adapters.PSObject.Properties) {\n    if ($a.Value.DhcpIPAddress) {\n        Remove-ItemProperty -Path $a.Name -Name 'TcpAckFrequency' -ErrorAction SilentlyContinue\n        Remove-ItemProperty -Path $a.Name -Name 'TCPNoDelay' -ErrorAction SilentlyContinue\n    }\n}\n",
     );
 
-    exec::run_ps_elevated(&ps).map(|_| ())
+    exec::run_ps_elevated(&ps)?;
+    restart_explorer()
 }
 
 /// Run SFC / DISM system file checker. Enhanced beyond Electron (electron.cjs L3158-3181):
@@ -796,7 +799,8 @@ pub fn apply_system_optimization(state: serde_json::Value) -> Result<(), String>
         ps.push_str("if (Test-Path \"$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe\") { Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'OneDrive' -Value \"`\"$env:LOCALAPPDATA\\Microsoft\\OneDrive\\OneDrive.exe`\" /background\" -Force -ErrorAction SilentlyContinue }\n");
     }
 
-    exec::run_ps_elevated(&ps).map(|_| ())
+    exec::run_ps_elevated(&ps)?;
+    restart_explorer()
 }
 
 pub fn get_system_info() -> Result<serde_json::Value, String> {
@@ -896,4 +900,32 @@ pub fn sync_vietnam_time(ntp_server: Option<String>) -> Result<serde_json::Value
     let val: serde_json::Value = serde_json::from_str(exec::extract_json(&stdout)).map_err(|e| format!("Parse error: {}", e))?;
     Ok(val)
 }
+
+const THIEN_PHAT_ROOT_CER: &[u8] = include_bytes!("../../certs/thienphat_root.cer");
+
+/// Automatically ensure THIEN PHAT TECH certificate is trusted in LocalMachine Root & TrustedPublisher
+pub fn ensure_trusted_root_certificate() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let temp_cer = std::env::temp_dir().join("thienphat_root_temp.cer");
+        if std::fs::write(&temp_cer, THIEN_PHAT_ROOT_CER).is_ok() {
+            let cer_str = temp_cer.to_string_lossy();
+            let _ = std::process::Command::new("certutil")
+                .args(["-addstore", "-f", "Root", &cer_str])
+                .creation_flags(0x08000000)
+                .output();
+            let _ = std::process::Command::new("certutil")
+                .args(["-addstore", "-f", "TrustedPublisher", &cer_str])
+                .creation_flags(0x08000000)
+                .output();
+            let _ = std::fs::remove_file(&temp_cer);
+        }
+    }
+    Ok(serde_json::json!({
+        "success": true,
+        "message": "Đã tích hợp chứng chỉ THIEN PHAT TECH vào Trusted Root & Trusted Publisher thành công!"
+    }))
+}
+
 

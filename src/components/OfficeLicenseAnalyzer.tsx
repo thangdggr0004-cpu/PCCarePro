@@ -38,7 +38,8 @@ const TOOLTIPS: Record<string, string> = {
   IFEO: 'Khóa Registry điều hướng tiến trình ứng dụng Windows.',
   Authenticode: 'Chữ ký số xác thực phần mềm chính hãng Microsoft.',
   SystemConfidence: 'Mức độ tin cậy kiểm tra tính toàn vẹn tệp và Registry hệ thống.',
-  ActivationConfidence: 'Mức độ tin cậy xác định phương thức và máy chủ kích hoạt.'
+  ActivationConfidence: 'Mức độ tin cậy xác định phương thức và máy chủ kích hoạt.',
+  SPP: 'Software Protection Platform - Dịch vụ của Windows chịu trách nhiệm xác thực và quản lý giấy phép cho Windows và Office.'
 };
 
 export default function OfficeLicenseAnalyzer() {
@@ -122,6 +123,27 @@ export default function OfficeLicenseAnalyzer() {
     ) &&
     (!report?.provenance?.kmsHostInfo?.host || report?.provenance?.kmsHostInfo?.host === 'N/A' || report?.provenance?.kmsHostInfo?.host === 'Không đọc được dữ liệu')
   );
+
+  const isLicenseStepWarning = Boolean(
+    isNotificationGraceExpiredMak ||
+    report?.matrix?.some((m: any) => 
+      (m.componentName?.includes('Bản Quyền') || m.componentName?.includes('License')) && 
+      (m.status === 'WARNING' || m.status === 'FAIL')
+    )
+  );
+
+  const confidenceDiff = Math.abs(systemConfidence - (report?.provenance?.confidence || 0));
+
+  const getDisplayActivationSource = () => {
+    if (!report?.provenance) return 'Chưa xác định';
+    if (isNotificationGraceExpiredMak || report.provenance.activationSource === 'Licensed — Grace Period Expired') {
+      return 'Volume MAK (Grace Expired)';
+    }
+    if (report.provenance.kmsHostInfo?.host === 'Không đọc được dữ liệu') {
+      return 'Chưa xác định';
+    }
+    return report.provenance.activationSource;
+  };
 
   const getStatusBadgeClass = (status: string | undefined) => {
     const s = (status || '').toUpperCase();
@@ -275,7 +297,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
                 <span>③ Phương thức: <strong className="text-cyan-300 font-bold">{report.provenance?.activationMethod || 'N/A'}</strong> {renderTooltipIcon('KMS')}</span>
               </div>
               <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                Độ tin cậy hệ thống: <strong className="text-emerald-400 font-bold">{systemConfidence}%</strong>
+                Độ tin cậy tệp &amp; hệ thống: <strong className={isLicenseStepWarning ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>{systemConfidence}%</strong>
                 <button 
                   onClick={() => setShowConfidenceBreakdown(true)}
                   className="p-0.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 rounded transition-colors cursor-pointer"
@@ -335,7 +357,10 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
             {/* Nguồn 2: SPP Service */}
             <div className="p-3.5 bg-[#090e1a] rounded-xl border border-amber-500/30 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-amber-300 uppercase">Trạng thái SPP thực tế</span>
+                <span className="text-[11px] font-bold text-amber-300 uppercase flex items-center">
+                  Trạng thái SPP thực tế
+                  {renderTooltipIcon('SPP')}
+                </span>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
                   Notification / Grace Expired
                 </span>
@@ -362,7 +387,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
               <button onClick={() => setShowConfidenceBreakdown(false)} className="text-slate-400 hover:text-white font-bold text-sm cursor-pointer">✕</button>
             </div>
             <p className="text-[11px] text-slate-400">
-              Độ tin cậy tổng hợp được tính toán dựa trên trọng số đóng góp của từng Collector và khấu trừ nếu có cảnh báo:
+              Độ tin cậy tổng hợp được tính theo trọng số đóng góp thực tế: PASS = 100% điểm, WARN = 50% điểm (giảm một nửa), FAIL = 0 điểm:
             </p>
             <div className="space-y-1.5 font-mono text-[11px]">
               {(report.matrix || []).map((item: any, idx: number) => (
@@ -371,8 +396,12 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
                     {item.status === 'PASS' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
                     <span className="font-bold text-slate-200">{item.componentName}</span>
                   </div>
-                  <span className={`font-bold ${item.status === 'PASS' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {item.status === 'PASS' ? `+${item.confidenceWeight}%` : `-${item.confidenceWeight}%`}
+                  <span className={`font-bold ${item.status === 'PASS' ? 'text-emerald-400' : item.status === 'WARNING' ? 'text-amber-400' : 'text-rose-400'}`}>
+                    {item.status === 'PASS'
+                      ? `+${item.confidenceWeight}%`
+                      : item.status === 'WARNING'
+                      ? `+${Math.round(item.confidenceWeight * 0.5)}% (giảm 50%)`
+                      : `0%`}
                   </span>
                 </div>
               ))}
@@ -406,11 +435,11 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
             </div>
           </div>
 
-          {/* Ô 2: Độ tin cậy hệ thống */}
-          <div className="bg-[#131d33] p-4 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between space-y-1.5">
+          {/* Ô 2: Độ tin cậy tệp & hệ thống (Kháng can thiệp) */}
+          <div className={`p-4 rounded-xl shadow-sm flex flex-col justify-between space-y-1.5 ${isLicenseStepWarning ? 'bg-[#131d33] border border-amber-500/30' : 'bg-[#131d33] border border-slate-800'}`}>
             <UiInlineLabel className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
               <span className="flex items-center">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 mr-1.5" /> Độ tin cậy hệ thống
+                <ShieldCheck className={`w-3.5 h-3.5 mr-1.5 ${isLicenseStepWarning ? 'text-amber-400' : 'text-emerald-400'}`} /> Độ tin cậy tệp &amp; hệ thống (Kháng can thiệp)
                 {renderTooltipIcon('SystemConfidence')}
               </span>
               <button onClick={() => setShowConfidenceBreakdown(true)} className="text-[10px] text-cyan-400 hover:text-cyan-300 underline font-bold cursor-pointer">
@@ -418,16 +447,18 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
               </button>
             </UiInlineLabel>
             <div className="flex items-center gap-2">
-              <div className={`text-xl font-black font-mono ${systemConfidence >= 95 ? 'text-emerald-400' : systemConfidence >= 60 ? 'text-amber-400' : 'text-rose-400'}`}>
+              <div className={`text-xl font-black font-mono ${isLicenseStepWarning ? 'text-amber-400' : (systemConfidence >= 95 ? 'text-emerald-400' : systemConfidence >= 60 ? 'text-amber-400' : 'text-rose-400')}`}>
                 {systemConfidence}%
               </div>
-              <div className="text-[10px] text-slate-400 font-medium">
-                ({report.confidenceResult?.level?.label || 'Đã xác nhận'})
+              <div className={`text-[10px] font-medium ${isLicenseStepWarning ? 'text-amber-300' : 'text-slate-400'}`}>
+                {isLicenseStepWarning 
+                  ? '(Tệp hệ thống sạch • Bản Quyền Office: Cần xác minh)' 
+                  : `(${report.confidenceResult?.level?.label || 'Đã xác nhận'})`}
               </div>
             </div>
             <div className="w-full bg-[#0e1626] h-1.5 rounded-full overflow-hidden border border-slate-800">
               <div 
-                className={`h-full transition-all duration-500 ${systemConfidence >= 95 ? 'bg-emerald-500' : systemConfidence >= 60 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                className={`h-full transition-all duration-500 ${isLicenseStepWarning ? 'bg-amber-500' : (systemConfidence >= 95 ? 'bg-emerald-500' : systemConfidence >= 60 ? 'bg-amber-500' : 'bg-rose-500')}`}
                 style={{ width: `${systemConfidence}%` }}
               />
             </div>
@@ -487,7 +518,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
                 {isScanning ? 'Đang quét...' : 'Quét lại'}
               </button>
               <span className="text-xs font-bold font-mono text-cyan-400 flex items-center">
-                Độ tin cậy đánh giá: {report.provenance.confidence}%
+                Độ tin cậy bằng chứng bản quyền: {report.provenance.confidence}%
                 {renderTooltipIcon('ActivationConfidence')}
               </span>
             </div>
@@ -497,7 +528,7 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
           <div className="p-4 bg-[#090e1a] text-slate-200 rounded-xl space-y-3 border border-slate-800 font-sans shadow-md">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5 text-xs">
               <span className="text-slate-400 font-bold uppercase text-xs">Cấp độ xác minh bản quyền:</span>
-              <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+              <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${isNotificationGraceExpiredMak ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'}`}>
                 {report.provenance.provenanceLevelText || 'NGUỒN KÍCH HOẠT CẦN XÁC MINH THÊM (LEVEL 3)'}
               </span>
             </div>
@@ -509,26 +540,44 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
               <span>➔</span>
               <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-emerald-300 font-semibold">Tổng hợp dữ liệu</span>
               <span>➔</span>
-              <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-amber-300 font-semibold">Mức độ tin cậy ({systemConfidence}% )</span>
+              <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-amber-300 font-semibold">Mức độ tin cậy ({systemConfidence}%)</span>
               <span>➔</span>
               <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-purple-300 font-semibold">Chẩn đoán hệ thống</span>
               <span>➔</span>
               <span className="px-2 py-0.5 bg-slate-800 rounded-lg text-teal-300 font-semibold">Hướng xử lý</span>
             </div>
 
-            <div className="text-xs text-slate-300 space-y-2 font-sans leading-relaxed">
-              <p className="text-xs">
-                Trạng thái ghi nhận: <strong className={`${getStatusTextClass(report.provenance.activationStatus)} font-bold`}>{report.provenance.activationStatus}</strong> ({report.provenance.activationMethod}). Hệ thống không phát hiện các công cụ can thiệp hoặc tệp tin bị thay đổi. Khi cần đối soát bản quyền, bạn có thể lưu giữ các chứng từ sau:
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-400 pt-2 border-t border-slate-800 font-mono">
-                <div>• Hóa đơn mua máy hoặc chứng nhận bản quyền.</div>
-                <div>• Tem COA (Certificate of Authenticity).</div>
-                <div>• Khóa bản quyền (Product Key) chính hãng.</div>
-                <div>• Email xác nhận từ Microsoft Store.</div>
-                <div>• Hợp đồng cấp phép doanh nghiệp (VLSC / M365).</div>
-                <div>• Tài khoản bản quyền số (Microsoft Digital License).</div>
+            {isNotificationGraceExpiredMak ? (
+              <div className="text-xs text-slate-300 space-y-2 font-sans leading-relaxed">
+                <p className="text-xs">
+                  Trạng thái ghi nhận: <strong className="text-amber-400 font-bold">{report.provenance.activationStatus}</strong> ({report.provenance.activationMethod}).
+                  Hệ thống sạch (không có Ohook, can thiệp tệp hay máy chủ KMS giả mạo). Tuy nhiên, giấy phép <strong>Volume MAK</strong> đã hết thời gian gia hạn hệ thống (Grace Period Expired) và chuyển sang chế độ Thông báo.
+                </p>
+                <div className="bg-[#0e1626] p-3 rounded-xl border border-amber-500/20 space-y-1.5 text-[11px] text-slate-300">
+                  <strong className="text-amber-300 block font-bold uppercase text-[10px] tracking-wide">
+                    Lý giải &amp; Các bước xử lý cụ thể:
+                  </strong>
+                  <div>• <strong>Bản chất:</strong> Key Volume MAK đã hết hạn gia hạn cấp hệ thống (SPP ghi nhận LicenseStatus = 5). Word vẫn có thể báo &quot;Activated&quot; do lưu cache phiên cũ, nhưng thực tế bản quyền cần được gia hạn hoặc kích hoạt lại.</div>
+                  <div>• <strong>Bước 1:</strong> Kiểm tra lại tình trạng khóa Product Key (đuôi ...{report.licData?.partialKey || 'MAK'}) với bộ phận IT công ty hoặc đơn vị cấp phép.</div>
+                  <div>• <strong>Bước 2:</strong> Nhập lại Product Key MAK mới hợp lệ nếu key cũ đã hết lượt kích hoạt.</div>
+                  <div>• <strong>Lưu ý:</strong> Tệp hệ thống hoàn toàn nguyên bản, tuyệt đối không chạy các công cụ can thiệp tệp hệ thống.</div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="text-xs text-slate-300 space-y-2 font-sans leading-relaxed">
+                <p className="text-xs">
+                  Trạng thái ghi nhận: <strong className={`${getStatusTextClass(report.provenance.activationStatus)} font-bold`}>{report.provenance.activationStatus}</strong> ({report.provenance.activationMethod}). Hệ thống không phát hiện các công cụ can thiệp hoặc tệp tin bị thay đổi. Khi cần đối soát bản quyền, bạn có thể lưu giữ các chứng từ sau:
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-slate-400 pt-2 border-t border-slate-800 font-mono">
+                  <div>• Hóa đơn mua máy hoặc chứng nhận bản quyền.</div>
+                  <div>• Tem COA (Certificate of Authenticity).</div>
+                  <div>• Khóa bản quyền (Product Key) chính hãng.</div>
+                  <div>• Email xác nhận từ Microsoft Store.</div>
+                  <div>• Hợp đồng cấp phép doanh nghiệp (VLSC / M365).</div>
+                  <div>• Tài khoản bản quyền số (Microsoft Digital License).</div>
+                </div>
+              </div>
+            )}
 
             {/* SHORTENED MANDATORY DISCLAIMER BLOCK */}
             <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300 leading-relaxed font-sans">
@@ -556,18 +605,28 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
                 {isKmsMethod ? 'Máy chủ KMS' : 'Nguồn kích hoạt'}
               </span>
               <span className="font-bold text-slate-200 text-sm mt-0.5 block">
-                {report.provenance.kmsHostInfo?.host === 'Không đọc được dữ liệu' ? 'Chưa xác định' : report.provenance.activationSource}
+                {getDisplayActivationSource()}
               </span>
             </div>
 
             <div className="bg-[#0e1626] p-3 rounded-xl border border-slate-800">
               <span className="text-[10px] font-bold text-slate-500 block uppercase flex items-center">
-                Độ tin cậy nguồn kích hoạt
+                Độ tin cậy bằng chứng bản quyền
                 {renderTooltipIcon('ActivationConfidence')}
               </span>
               <span className="font-bold text-cyan-400 text-sm mt-0.5 block">{report.provenance.confidence}%</span>
             </div>
           </div>
+
+          {/* DÒNG GIẢI THÍCH KHI 2 CHỈ SỐ TIN CẬY CHÊNH LỆCH ĐÁNG KỂ */}
+          {confidenceDiff >= 15 && (
+            <div className="p-2.5 bg-[#0e1626] rounded-xl border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2 font-sans">
+              <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0 mt-0.5" />
+              <span>
+                Lưu ý phân biệt 2 phép đo độc lập: <strong>{systemConfidence}%</strong> phản ánh tệp tin &amp; hệ thống nguyên bản (không bị can thiệp/bẻ khóa); trong khi <strong>{report.provenance.confidence}%</strong> phản ánh mức độ xác thực của bằng chứng giấy phép hiện tại (đang ở trạng thái cần xác minh lại).
+              </span>
+            </div>
+          )}
 
           {/* KHUYẾN NGHỊ — TÍNH ĐỘNG TỪ decisionResult/matrix */}
           <div className="bg-[#0e1626] p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 flex items-start gap-2.5">
@@ -707,7 +766,13 @@ ${(report.matrix || []).map((m: any) => `| ${m.componentName} | **${m.status}** 
 
                           <div className="flex items-center gap-3">
                             <span className="text-[10px] text-slate-500 font-mono">{item.executionTimeMs || 0}ms</span>
-                            <span className="text-[10px] font-bold text-slate-400 font-mono">+{item.confidenceWeight}%</span>
+                            <span className={`text-[10px] font-bold font-mono ${item.status === 'PASS' ? 'text-slate-400' : item.status === 'WARNING' ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {item.status === 'PASS'
+                                ? `+${item.confidenceWeight}%`
+                                : item.status === 'WARNING'
+                                ? `+${Math.round(item.confidenceWeight * 0.5)}% (giảm 50% do cảnh báo)`
+                                : `0% (không cộng)`}
+                            </span>
                             {item.status === 'PASS' && (
                               <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                                 ✔ PASS

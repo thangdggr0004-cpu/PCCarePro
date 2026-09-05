@@ -90,6 +90,8 @@ export default function JobReportViewer() {
           const offStatus = r.provenance?.activationStatus || 'LICENSED';
           if (offStatus === 'LICENSED') {
             offLic = `✔ ${offName}: Máy sạch - Đã kích hoạt (${offMethod} - Cần hóa đơn/chứng từ doanh nghiệp nếu muốn đối soát)`;
+          } else if (offStatus === 'NOTIFICATION') {
+            offLic = `⚠ ${offName}: Office có giấy phép nhưng Grace Period đã hết - Đang ở chế độ thông báo (${offMethod})`;
           } else {
             offLic = `❌ ${offName}: Chưa kích hoạt`;
           }

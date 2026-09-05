@@ -91,7 +91,7 @@ export default function WindowsSettings() {
   const [fixingAction, setFixingAction] = useState<string | null>(null);
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   const [applyingSection, setApplyingSection] = useState<'system' | 'taskbar' | 'optimization' | null>(null);
-  const [successNotice, setSuccessNotice] = useState<{ title: string; message: string; sectionName: string } | null>(null);
+  const [toastNotice, setToastNotice] = useState<string | null>(null);
   const [tamperEnabled, setTamperEnabled] = useState<boolean | null>(null);
   const [tamperManaged, setTamperManaged] = useState<boolean>(false);
 
@@ -141,6 +141,8 @@ export default function WindowsSettings() {
         if (advancedOpts.enableGameMode) appliedList.push("Kích hoạt Game Mode");
         if (advancedOpts.disableStartupDelay) appliedList.push("Bỏ thời gian chờ khởi động ứng dụng");
         appendWindowsHistory(appliedList.map(x => `✅ [Tối ưu nâng cao] ${x}`));
+        setToastNotice("⚡ Đã áp dụng Tối Ưu Nâng Cao & tự động làm mới Explorer thành công!");
+        setTimeout(() => setToastNotice(null), 4000);
       } else {
         setAdvancedResult("Lỗi khi áp dụng: " + (res?.error || "Không xác định"));
       }
@@ -251,11 +253,8 @@ export default function WindowsSettings() {
         }));
         setTimeSyncResult("Đã chuẩn hóa múi giờ Việt Nam (UTC+07) và đồng bộ thời gian thành công!");
         appendWindowsHistory(['⏰ [Chuẩn Hóa Giờ VN] Đã đặt múi giờ SE Asia Standard Time (UTC+07) + Resync NTP']);
-        setSuccessNotice({
-          title: "Chuẩn Hóa Giờ Thành Công",
-          message: "Múi giờ đã đặt về UTC+07 (Bangkok, Hanoi, Jakarta) và đồng bộ máy chủ NTP.",
-          sectionName: "Giờ Hệ Thống"
-        });
+        setToastNotice("⏰ Đã chuẩn hóa múi giờ Việt Nam (UTC+07) và đồng bộ thời gian thành công!");
+        setTimeout(() => setToastNotice(null), 4000);
       } else {
         setTimeSyncResult("Lỗi: " + (res?.error || "Không thể đồng bộ"));
       }
@@ -496,11 +495,11 @@ export default function WindowsSettings() {
           optLabels.forEach(([k, lbl]) => { if (state[k]) logItems.push(lbl); });
         }
         appendWindowsHistory(logItems.map(x => `✅ [${sectionName}] ${x}`));
-        setSuccessNotice({
-          title: `Đã áp dụng thành công: ${sectionName}`,
-          message: `Các cấu hình Registry và Services đã được cập nhật vào hệ thống.`,
-          sectionName
-        });
+        try {
+          await (window as any).electronAPI.restartExplorer();
+        } catch (_) {}
+        setToastNotice(`✅ Đã áp dụng ${sectionName} & tự động làm mới Explorer thành công!`);
+        setTimeout(() => setToastNotice(null), 4000);
       } else {
         alert("Lỗi khi áp dụng: " + (res?.error || "Không xác định"));
       }
@@ -1240,64 +1239,19 @@ export default function WindowsSettings() {
         </div>
       )}
 
-      {/* SUCCESS NOTICE & REBOOT GUIDANCE MODAL */}
-      {successNotice && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-          <div className="bg-[#101728] rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-800 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-500/20 rounded-xl border border-emerald-500/30 shrink-0">
-                <CheckCircle className="w-6 h-6 text-emerald-400" />
-              </div>
-              <div>
-                <h3 className="font-bold text-white text-sm">{successNotice.title}</h3>
-                <p className="text-xs text-slate-400 mt-0.5">{successNotice.message}</p>
-              </div>
-            </div>
-
-            {/* Reboot Advice Warning Box */}
-            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2 text-xs text-amber-300">
-              <div className="flex items-center gap-1.5 font-bold text-amber-400">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>Hướng dẫn hoàn tất cài đặt:</span>
-              </div>
-              <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-300 leading-relaxed">
-                <li>Một số thiết lập (như Menu chuột phải cổ điển, Fast Startup, Tắt Services ngầm...) cần **Khởi động lại máy (Restart PC)** để Windows áp dụng 100%.</li>
-                <li>Các thiết lập giao diện Taskbar đã được làm mới Explorer tự động.</li>
-              </ul>
-            </div>
-
-            {/* Actions */}
-            <div className="pt-2 flex flex-col sm:flex-row items-center gap-2 justify-end">
-              <button
-                onClick={async () => {
-                  await (window as any).electronAPI.restartExplorer();
-                }}
-                className="w-full sm:w-auto px-3.5 py-2 text-xs font-semibold bg-[#18233c] hover:bg-[#202f50] text-slate-200 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Restart Explorer
-              </button>
-
-              <button
-                onClick={async () => {
-                  if (window.confirm("Bạn có chắc chắn muốn khởi động lại máy tính ngay bây giờ để hoàn tất cài đặt?")) {
-                    await (window as any).electronAPI.restartComputer();
-                  }
-                }}
-                className="w-full sm:w-auto px-3.5 py-2 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
-              >
-                <Zap className="w-3.5 h-3.5" />
-                Khởi động lại máy
-              </button>
-
-              <button
-                onClick={() => setSuccessNotice(null)}
-                className="w-full sm:w-auto px-4 py-2 text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl transition-colors cursor-pointer shadow-sm active:scale-95"
-              >
-                Đã hiểu (Đóng)
-              </button>
-            </div>
+      {/* TOAST NOTIFICATION (Tự động biến mất, tự động làm mới Explorer) */}
+      {toastNotice && (
+        <div className="fixed top-6 right-6 z-[100] max-w-md p-4 bg-[#101728]/95 backdrop-blur border border-emerald-500/40 rounded-2xl shadow-2xl flex items-center gap-3 animate-fade-in text-slate-100">
+          <div className="p-2 bg-emerald-500/20 rounded-xl border border-emerald-500/30 shrink-0">
+            <CheckCircle className="w-5 h-5 text-emerald-400" />
           </div>
+          <p className="text-xs font-semibold leading-relaxed flex-1">{toastNotice}</p>
+          <button 
+            onClick={() => setToastNotice(null)} 
+            className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+          >
+            ✕
+          </button>
         </div>
       )}
 

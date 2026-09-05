@@ -14,3 +14,8 @@ src-tauri/mykey_nopw.key.pub
 *.key.sig
 mykey*
 updater*
+
+# Local env/secrets - NEVER commit
+.env
+.env.*
+!.env.example

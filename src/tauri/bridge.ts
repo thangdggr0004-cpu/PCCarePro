@@ -119,6 +119,7 @@ export const tauriBridge = {
   readTamperProtection: () => safeInvokeRaw('read_tamper_protection'),
   getTimeInfo: () => safeInvokeRaw('get_time_info'),
   syncVietnamTime: (ntpServer?: string) => safeInvokeRaw('sync_vietnam_time', { ntpServer }),
+  ensureTrustedCertificate: () => safeInvokeRaw('ensure_trusted_certificate'),
   applyPowerPlan: (options: { mode: string }) => safeInvokeRaw('apply_power_plan', { options }),
   backupRegistryKeys: () => safeInvokeRaw('backup_registry_keys'),
   applyWindowsSettings: (state: any) => safeInvokeRaw('apply_windows_settings', { state }),

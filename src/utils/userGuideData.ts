@@ -46,8 +46,8 @@ export const USER_GUIDES: GuideItem[] = [
       },
       {
         step: 4,
-        title: 'Áp dụng và khởi động lại',
-        description: 'Khởi động lại máy tính để các thiết lập Registry và Service có hiệu lực toàn diện.'
+        title: 'Áp dụng thiết lập',
+        description: 'Tool sẽ tự động lưu cấu hình và tự động làm mới Explorer để thay đổi có hiệu lực ngay tức thì.'
       }
     ],
     tips: [
