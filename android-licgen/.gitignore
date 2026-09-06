@@ -1,0 +1,6 @@
+obj/
+*.dex
+*.zip
+*.apk
+release.keystore
+
