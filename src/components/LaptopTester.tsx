@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Camera, Mic, Monitor, Fingerprint, Battery, HardDrive, Cpu, 
-  X, Maximize, AlertTriangle, Keyboard as KeyboardIcon 
+  X, Maximize, AlertTriangle, Keyboard as KeyboardIcon, Touchpad as TouchpadIcon 
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import TouchScreenTester from './TouchScreenTester.js';
+import TouchpadTester from './TouchpadTester';
 
 export default function LaptopTester() {
   const [activeTest, setActiveTest] = useState<string | null>(null);
@@ -21,9 +22,10 @@ export default function LaptopTester() {
   const cards = [
     { id: 'screen', name: 'Kiểm tra Màn hình', icon: <Monitor className="h-8 w-8 text-emerald-400" />, color: 'from-emerald-500 to-emerald-400' },
     { id: 'keyboard', name: 'Kiểm tra Bàn phím', icon: <KeyboardIcon className="h-8 w-8 text-cyan-400" />, color: 'from-cyan-500 to-cyan-400' },
+    { id: 'touchpad', name: 'Kiểm tra Touchpad', icon: <TouchpadIcon className="h-8 w-8 text-amber-400" />, color: 'from-amber-500 to-amber-400' },
+    { id: 'touch', name: 'Kiểm tra Cảm ứng', icon: <Fingerprint className="h-8 w-8 text-emerald-400" />, color: 'from-emerald-500 to-emerald-600' },
     { id: 'webcam', name: 'Kiểm tra Webcam', icon: <Camera className="h-8 w-8 text-purple-400" />, color: 'from-purple-500 to-purple-400' },
     { id: 'mic', name: 'Kiểm tra Micro', icon: <Mic className="h-8 w-8 text-rose-400" />, color: 'from-rose-500 to-red-500' },
-    { id: 'touch', name: 'Kiểm tra Cảm ứng', icon: <Fingerprint className="h-8 w-8 text-emerald-400" />, color: 'from-emerald-500 to-emerald-600' },
     { id: 'battery', name: 'Thông tin Pin', icon: <Battery className="h-8 w-8 text-amber-400" />, color: 'from-amber-400 to-orange-500' },
     { id: 'disk', name: 'Kiểm tra Ổ cứng', icon: <HardDrive className="h-8 w-8 text-blue-400" />, color: 'from-blue-600 to-blue-800' },
     { id: 'vga', name: 'Kiểm tra VGA', icon: <Cpu className="h-8 w-8 text-teal-400" />, color: 'from-teal-500 to-teal-600', action: handleDxDiag },
@@ -37,11 +39,11 @@ export default function LaptopTester() {
           KIỂM TRA LAPTOP TOÀN DIỆN
         </h2>
         <p className="mt-1 text-slate-400 text-xs">
-          Bộ công cụ 8 trong 1 giúp kỹ thuật viên test nhanh chóng các thành phần phần cứng máy tính một cách chuyên nghiệp.
+          Bộ công cụ 9 trong 1 giúp kỹ thuật viên test nhanh chóng các thành phần phần cứng máy tính một cách chuyên nghiệp.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4">
         {cards.map(card => (
           <div 
             key={card.id}
@@ -88,10 +90,10 @@ function TestModal({ test, onClose }: { test: string, onClose: () => void }) {
     };
   }, [test]);
 
-  // Handle ESC (except keyboard test which handles Escape internally to test the key)
+  // Handle ESC (except keyboard and touchpad tests which handle Escape internally)
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
-      if (test === 'keyboard') return;
+      if (test === 'keyboard' || test === 'touchpad') return;
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleEsc);
@@ -100,17 +102,20 @@ function TestModal({ test, onClose }: { test: string, onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-[100] bg-[#0b0f19] flex flex-col items-center justify-center select-none animate-fade-in">
-      <button 
-        onClick={onClose}
-        className="absolute top-6 right-6 p-3 bg-[#131d33] border border-slate-800 text-slate-300 hover:text-white rounded-full transition-all z-[110] shadow-xl hover:bg-[#18233c] cursor-pointer"
-        title="Nhấn ESC để thoát"
-      >
-        <X className="h-5 w-5" />
-      </button>
+      {test !== 'touch' && test !== 'touchpad' && (
+        <button 
+          onClick={onClose}
+          className="absolute top-6 right-6 p-3 bg-[#131d33] border border-slate-800 text-slate-300 hover:text-white rounded-full transition-all z-[110] shadow-xl hover:bg-[#18233c] cursor-pointer"
+          title="Nhấn ESC để thoát"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      )}
       
       <div className="w-full h-full relative">
         {test === 'screen' && <ScreenTest />}
         {test === 'keyboard' && <KeyboardTest onClose={onClose} />}
+        {test === 'touchpad' && <TouchpadTester onBack={onClose} />}
         {test === 'webcam' && <WebcamTest />}
         {test === 'mic' && <MicTest />}
         {test === 'touch' && <TouchScreenTester onBack={onClose} />}
