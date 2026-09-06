@@ -161,13 +161,13 @@ export default function AutoUpdater() {
             {downloaded && (
               <div className="flex flex-col gap-2 w-full">
                 <p className="text-xs text-emerald-400 font-medium">
-                  ✓ Cập nhật thành công!
+                  ✓ Đã tải xong bản cập nhật!
                 </p>
                 <button
                   onClick={relaunchApp}
                   className="flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer shadow-lg shadow-emerald-500/20 active:scale-95"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Tắt App &amp; Mở Bản Mới
+                  <RefreshCw className="w-3.5 h-3.5" /> Khởi Động Lại Để Áp Dụng
                 </button>
               </div>
             )}

@@ -116,9 +116,8 @@ pub async fn portable_update_download(app: AppHandle) -> Result<Value, String> {
         .find(|a| a.name == ASSET_NAME)
         .ok_or_else(|| "Không tìm thấy file cập nhật trong release.".to_string())?;
 
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe.parent().ok_or("Cannot determine exe directory")?;
-    let staged = exe_dir.join(STAGED_NAME);
+    // Store staged update in %TEMP% so no temporary files pollute the user's working directory
+    let staged = std::env::temp_dir().join(STAGED_NAME);
     let _ = std::fs::remove_file(&staged);
 
     let mut resp = client
@@ -167,56 +166,92 @@ pub async fn portable_update_download(app: AppHandle) -> Result<Value, String> {
     }))
 }
 
-fn build_apply_script(exe: &std::path::Path) -> std::path::PathBuf {
-    let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
-    let staged = exe_dir.join(STAGED_NAME);
-    let exe_s = exe.to_string_lossy().replace('"', "");
-    let staged_s = staged.to_string_lossy().replace('"', "");
-    // Write a .bat file to %TEMP% so cmd.exe doesn't mangle paths with spaces
-    // or parentheses when parsing the /C command line.  CR+LF for Windows compat.
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    exe_s.hash(&mut h);
-    let bat = std::env::temp_dir().join(format!("pccare_update_{:x}.bat", h.finish()));
-    let script = format!(
-        "@echo off\r\n\
-         :retry\r\n\
-         move /Y \"{staged_s}\" \"{exe_s}\" 2>nul\r\n\
-         if errorlevel 1 (\r\n\
-           ping 127.0.0.1 -n 3 > nul\r\n\
-           goto retry\r\n\
-         )\r\n\
-         powershell -NoProfile -Command \"Unblock-File -Path '{exe_s}' -ErrorAction SilentlyContinue\" 2>nul\r\n\
-         start \"\" \"{exe_s}\""
-    );
-    let _ = std::fs::write(&bat, script);
-    bat
+fn build_apply_powershell(pid: u32, exe: &std::path::Path, staged: &std::path::Path) -> String {
+    let exe_s = exe.to_string_lossy().to_string();
+    let staged_s = staged.to_string_lossy().to_string();
+    let exe_dir = exe.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    format!(
+        r#"$pidToWait = {pid}
+$target = "{exe_s}"
+$source = "{staged_s}"
+$targetDir = "{exe_dir}"
+
+try {{
+    $proc = Get-Process -Id $pidToWait -ErrorAction SilentlyContinue
+    if ($proc) {{ $proc.WaitForExit(10000) }}
+}} catch {{}}
+
+$ok = $false
+for ($i = 0; $i -lt 40; $i++) {{
+    try {{
+        [System.IO.File]::Copy($source, $target, $true)
+        $ok = $true
+        break
+    }} catch {{
+        Start-Sleep -Milliseconds 250
+    }}
+}}
+
+try {{ [System.IO.File]::Delete($source) }} catch {{}}
+if ($targetDir -ne "") {{
+    $legacy = [System.IO.Path]::Combine($targetDir, "pccare-update.exe")
+    if ([System.IO.File]::Exists($legacy)) {{
+        try {{ [System.IO.File]::Delete($legacy) }} catch {{}}
+    }}
+}}
+
+if ($ok) {{
+    Unblock-File -LiteralPath $target -ErrorAction SilentlyContinue
+    Start-Process -FilePath $target
+}}
+"#
+    )
 }
 
 #[tauri::command]
 pub async fn portable_update_apply(_app: AppHandle) -> Result<Value, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe.parent().ok_or("Cannot determine exe directory")?;
-    let staged = exe_dir.join(STAGED_NAME);
+    let mut staged = std::env::temp_dir().join(STAGED_NAME);
+    if !staged.exists() {
+        // Fallback: check exe_dir for legacy downloads
+        if let Some(dir) = exe.parent() {
+            let legacy = dir.join(STAGED_NAME);
+            if legacy.exists() {
+                staged = legacy;
+            }
+        }
+    }
     if !staged.exists() {
         return Err("Chưa có file cập nhật đã tải. Hãy tải cập nhật trước.".to_string());
     }
-    let bat = build_apply_script(&exe);
-    let mut cmd = std::process::Command::new("cmd.exe");
-    cmd.args(["/C", &bat.to_string_lossy()]);
+
+    let ps_script = build_apply_powershell(std::process::id(), &exe, &staged);
+    let utf16: Vec<u16> = ps_script.encode_utf16().collect();
+    let mut bytes = Vec::with_capacity(utf16.len() * 2);
+    for u in utf16 {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-EncodedCommand",
+        &encoded,
+    ]);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     cmd.spawn()
         .map_err(|e| format!("Không khởi động được bộ áp dụng cập nhật: {e}"))?;
 
-    // Give cmd.exe a moment to start, then hard-kill this process so the exe
-    // file is unlocked immediately.  std::process::exit (not app.exit) ensures
-    // the OS releases the file lock right away — the .bat retry-loop will then
-    // succeed on its first attempt.
+    // Give powershell a moment to launch, then exit to release file lock immediately
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     std::process::exit(0);
 }
@@ -227,6 +262,7 @@ pub fn cleanup_stale_update() {
             let _ = std::fs::remove_file(dir.join(STAGED_NAME));
         }
     }
+    let _ = std::fs::remove_file(std::env::temp_dir().join(STAGED_NAME));
 }
 
 #[cfg(test)]
@@ -244,25 +280,12 @@ mod tests {
 
     #[test]
     fn apply_script_swaps_staged_then_relaunches() {
-        let exe = std::path::Path::new(r"C:\Apps\pccare-master-pro.exe");
-        let bat = build_apply_script(exe);
-        let script = std::fs::read_to_string(&bat).unwrap();
-        assert!(
-            script.contains(r#"move /Y "C:\Apps\pccare-update.exe" "C:\Apps\pccare-master-pro.exe""#),
-            "script should swap pccare-update.exe over the exe: {script}"
-        );
-        assert!(script.contains(r#"start "" "C:\Apps\pccare-master-pro.exe""#), "script should relaunch: {script}");
-        assert!(script.contains(":retry"), "script should have retry loop: {script}");
-        assert!(script.contains("goto retry"), "script should loop back on failure: {script}");
-        let _ = std::fs::remove_file(&bat);
-    }
-
-    #[test]
-    fn apply_script_strips_quotes_from_paths() {
-        let exe = std::path::Path::new(r#"C:\Apps "folder"\exe"#);
-        let bat = build_apply_script(exe);
-        let script = std::fs::read_to_string(&bat).unwrap();
-        assert!(!script.contains("folder\"exe"), "embedded quote must be stripped: {script}");
-        let _ = std::fs::remove_file(&bat);
+        let exe = std::path::Path::new(r"C:\Apps\Bộ Tool\pccare-master-pro.exe");
+        let staged = std::path::Path::new(r"C:\Temp\pccare-update.exe");
+        let script = build_apply_powershell(1234, exe, staged);
+        assert!(script.contains(r#"$target = "C:\Apps\Bộ Tool\pccare-master-pro.exe""#));
+        assert!(script.contains(r#"$source = "C:\Temp\pccare-update.exe""#));
+        assert!(script.contains("System.IO.File]::Copy"));
+        assert!(script.contains("Start-Process -FilePath $target"));
     }
 }
