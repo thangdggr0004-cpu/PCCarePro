@@ -836,6 +836,19 @@ async fn apply_office_standard(options: serde_json::Value) -> Result<serde_json:
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+async fn get_tp_office_status() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| commands::office_addons::get_tp_office_status())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn install_tp_office_addon(addon_type: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || commands::office_addons::install_tp_office_addon(&addon_type))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 // ── Dialogs ───────────────────────────────────
 
@@ -980,6 +993,8 @@ verify_bios_restore,
             open_device_manager_printers,
             remove_reinstall_printer,
             apply_office_standard,
+            get_tp_office_status,
+            install_tp_office_addon,
             show_info_dialog,
             show_confirm_dialog,
 create_system_restore_point,

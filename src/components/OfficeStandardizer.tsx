@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   AlignLeft, 
   FileEdit, 
@@ -9,7 +9,11 @@ import {
   ShieldCheck, 
   Lock,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  FileSpreadsheet,
+  FileText,
+  Sparkles,
+  Download
 } from 'lucide-react';
 
 import { 
@@ -82,6 +86,65 @@ export default function OfficeStandardizer() {
   // Loading State
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingText, setLoadingText] = useState<string>('');
+
+  // TP Office Addons State
+  interface TpAddonStatus {
+    excelInstalled: boolean;
+    excelVersion: string;
+    wordInstalled: boolean;
+    wordVersion: string;
+  }
+  const [tpStatus, setTpStatus] = useState<TpAddonStatus>({
+    excelInstalled: false,
+    excelVersion: '',
+    wordInstalled: false,
+    wordVersion: ''
+  });
+  const [installingAddon, setInstallingAddon] = useState<'excel' | 'word' | null>(null);
+  const [installResult, setInstallResult] = useState<{ addon: string; message: string; success: boolean } | null>(null);
+
+  const loadTpStatus = async () => {
+    try {
+      const res = await (window as any).electronAPI?.getTpOfficeStatus?.();
+      if (res?.success && res.data) {
+        setTpStatus(res.data);
+      }
+    } catch (e) {
+      console.error('Failed to read TP office status:', e);
+    }
+  };
+
+  useEffect(() => {
+    loadTpStatus();
+  }, []);
+
+  const handleInstallAddon = async (type: 'excel' | 'word') => {
+    setInstallingAddon(type);
+    setInstallResult(null);
+    const title = type === 'excel' ? 'Cài Đặt TPExcel Pro' : 'Cài Đặt TPWord Pro';
+    const taskId = `tp-office-install-${type}`;
+    startTask(taskId, title, 'Tiện Ích Office', 'Đang giải nén & tự động cài đặt...', 'office-standardizer');
+    try {
+      const res = await (window as any).electronAPI?.installTpOfficeAddon?.(type);
+      if (res?.success) {
+        setInstallResult({ addon: type, message: res.message, success: true });
+        completeTask(taskId, res.message);
+        await loadTpStatus();
+      } else {
+        const err = res?.error || 'Cài đặt không thành công';
+        setInstallResult({ addon: type, message: err, success: false });
+        failTask(taskId, err);
+        alert(err);
+      }
+    } catch (e: any) {
+      const err = e?.message || String(e);
+      setInstallResult({ addon: type, message: err, success: false });
+      failTask(taskId, err);
+      alert('Lỗi: ' + err);
+    } finally {
+      setInstallingAddon(null);
+    }
+  };
 
   const { startTask, updateTask, completeTask, failTask } = useTaskManager();
 
@@ -156,6 +219,176 @@ export default function OfficeStandardizer() {
           <p className="text-xs text-slate-400 mt-1">
             Bộ công cụ 1-Click giúp kỹ thuật viên chuẩn hóa Word/Excel, sửa các lỗi treo/văng cứng đầu và quản trị giấy phép an toàn, tối ưu nhất.
           </p>
+        </div>
+      </div>
+
+      {/* SECTION 0: BỘ TIỆN ÍCH ĐỘC QUYỀN THIENPHATTECH (TỰ ĐỘNG CÀI ĐẶT 1-CLICK) */}
+      <div className="bg-[#101728] rounded-2xl border border-emerald-500/30 p-5 shadow-2xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3.5">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-gradient-to-br from-amber-500/20 to-emerald-500/20 rounded-xl border border-amber-500/30 text-amber-400">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                Bộ Tiện Ích Độc Quyền ThienPhatTech (1-Click Tự Động Cài Đặt)
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Tích hợp thanh Ribbon Excel &amp; Word chuyên dụng cho văn phòng Việt Nam, tự động cài đặt Add-in và nhúng Normal.dotm chuẩn.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={loadTpStatus}
+            className="text-xs text-slate-400 hover:text-emerald-400 flex items-center gap-1.5 self-start sm:self-auto cursor-pointer transition-colors"
+            title="Làm mới trạng thái"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Kiểm tra trạng thái
+          </button>
+        </div>
+
+        {installResult && (
+          <div className={`p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 animate-fade-in ${
+            installResult.success
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+          }`}>
+            <div className="flex items-center gap-2.5">
+              {installResult.success ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+              )}
+              <span className="leading-relaxed">{installResult.message}</span>
+            </div>
+            <button 
+              onClick={() => setInstallResult(null)}
+              className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-800 transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* CARD 1: TPEXCEL PRO */}
+          <div className="group bg-[#131d33] rounded-2xl border border-slate-800 p-5 shadow-xl hover:border-emerald-500/50 transition-all flex flex-col justify-between">
+            <div>
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="w-12 h-12 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <FileSpreadsheet className="w-6 h-6" />
+                </div>
+                <div className="flex flex-col items-end gap-1.5">
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                    v0.6.0
+                  </span>
+                  {tpStatus.excelInstalled ? (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2 py-0.5 rounded-md">
+                      <CheckCircle2 className="w-3 h-3" /> Đã cài đặt
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 bg-slate-800/80 border border-slate-700/80 px-2 py-0.5 rounded-md">
+                      Chưa cài đặt
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <h4 className="font-bold text-white text-base group-hover:text-emerald-400 transition-colors">
+                TPExcel Pro - Tiện Ích Excel Cho Người Việt
+              </h4>
+              <p className="text-slate-400 text-xs mt-2 leading-relaxed">
+                Đọc số thành chữ VNĐ chuẩn kế toán, chuyển đổi bảng mã font TCVN3/VNI sang Unicode, tách/gộp họ tên, xóa dòng trống siêu tốc, chuẩn hóa bảng biểu báo cáo.
+              </p>
+            </div>
+
+            <div className="mt-5 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-slate-500">
+                Tự động tạo Tab Ribbon trong Excel
+              </span>
+              <button
+                onClick={() => handleInstallAddon('excel')}
+                disabled={installingAddon !== null}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer active:scale-95 disabled:opacity-50 ${
+                  tpStatus.excelInstalled
+                    ? 'bg-[#18233c] hover:bg-emerald-500 hover:text-slate-950 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20'
+                }`}
+              >
+                {installingAddon === 'excel' ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Đang cài đặt...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    {tpStatus.excelInstalled ? 'Cài Lại / Cập Nhật' : 'Cài Đặt Tự Động 1-Click'}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* CARD 2: TPWORD PRO */}
+          <div className="group bg-[#131d33] rounded-2xl border border-slate-800 p-5 shadow-xl hover:border-blue-500/50 transition-all flex flex-col justify-between">
+            <div>
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="w-12 h-12 rounded-xl bg-blue-500/20 border border-blue-500/30 text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <div className="flex flex-col items-end gap-1.5">
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                    v1.0.0
+                  </span>
+                  {tpStatus.wordInstalled ? (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-blue-400 bg-blue-950/60 border border-blue-800/80 px-2 py-0.5 rounded-md">
+                      <CheckCircle2 className="w-3 h-3" /> Đã cài đặt
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 bg-slate-800/80 border border-slate-700/80 px-2 py-0.5 rounded-md">
+                      Chưa cài đặt
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <h4 className="font-bold text-white text-base group-hover:text-blue-400 transition-colors">
+                TPWord Pro - Tiện Ích Word Chuẩn Nghị Định 30
+              </h4>
+              <p className="text-slate-400 text-xs mt-2 leading-relaxed">
+                Tự động định dạng văn bản hành chính theo Nghị định 30 (căn lề, cỡ chữ, giãn dòng, quốc hiệu, tiêu ngữ), thư viện mẫu văn bản công văn và bảng biểu có sẵn.
+              </p>
+            </div>
+
+            <div className="mt-5 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-slate-500">
+                Nhúng trực tiếp vào Normal.dotm
+              </span>
+              <button
+                onClick={() => handleInstallAddon('word')}
+                disabled={installingAddon !== null}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer active:scale-95 disabled:opacity-50 ${
+                  tpStatus.wordInstalled
+                    ? 'bg-[#18233c] hover:bg-blue-500 hover:text-slate-950 text-blue-300 border border-blue-500/30'
+                    : 'bg-blue-500 hover:bg-blue-400 text-slate-950 shadow-lg shadow-blue-500/20'
+                }`}
+              >
+                {installingAddon === 'word' ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Đang cài đặt...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    {tpStatus.wordInstalled ? 'Cài Lại / Cập Nhật' : 'Cài Đặt Tự Động 1-Click'}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

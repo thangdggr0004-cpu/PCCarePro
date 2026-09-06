@@ -10,3 +10,4 @@ pub mod singleflight;
 pub mod startup;
 pub mod temp;
 pub mod windows_settings;
+pub mod office_addons;

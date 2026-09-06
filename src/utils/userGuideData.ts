@@ -133,6 +133,37 @@ export const USER_GUIDES: GuideItem[] = [
 
   // ── 2. TIỆN ÍCH OFFICE ───────────────────────────────
   {
+    id: 'tp-office-addons',
+    title: 'Cài đặt bộ tiện ích độc quyền TPExcel Pro & TPWord Pro',
+    category: 'office',
+    categoryName: 'Tiện Ích Office',
+    targetSection: 'standardizer',
+    summary: 'Tích hợp tự động 1-Click thanh Ribbon TPExcel Pro và TPWord Pro chuyên dụng cho dân văn phòng và kế toán Việt Nam.',
+    whenToUse: 'Khi cần các tính năng chuyên biệt: Đọc số thành chữ VNĐ trong Excel, chuyển mã font TCVN3/VNI sang Unicode, tách/gộp họ tên, chuẩn hóa văn bản hành chính theo Nghị định 30 trong Word.',
+    steps: [
+      {
+        step: 1,
+        title: 'Mở tab Tiện Ích Office',
+        description: 'Tại khối đầu trang "Bộ Tiện Ích Độc Quyền ThienPhatTech", kiểm tra huy hiệu trạng thái của TPExcel Pro và TPWord Pro.'
+      },
+      {
+        step: 2,
+        title: 'Bấm "Cài Đặt Tự Động 1-Click"',
+        description: 'Hệ thống sẽ tự động đóng tiến trình Word/Excel đang mở, giải nén bộ cài và thực thi cài đặt âm thầm trong nền.'
+      },
+      {
+        step: 3,
+        title: 'Hoàn tất và sử dụng',
+        description: 'Sau khi có thông báo hoàn tất, mở Microsoft Excel hoặc Word sẽ thấy xuất hiện ngay tab Ribbon "TPExcel Pro" hoặc "TPWord Pro" để sử dụng.'
+      }
+    ],
+    tips: [
+      'Bộ cài được tích hợp hoàn toàn bên trong tool, không cần kết nối mạng hay tải file ngoài.',
+      'Nếu trước đó Word/Excel đang mở tài liệu quan trọng, hãy lưu file trước khi bấm cài đặt vì tool sẽ tự động đóng tiến trình để inject Add-in.'
+    ],
+    keywords: ['tpexcel', 'tpword', 'đọc số thành chữ', 'chuyển mã font', 'tcvn3', 'vni', 'unicode', 'tách họ tên', 'nghị định 30', 'ribbon', 'xlam', 'dotm', 'add-in']
+  },
+  {
     id: 'office-standardize',
     title: 'Chuẩn hóa văn bản Word theo Nghị định 30/2020/NĐ-CP',
     category: 'office',

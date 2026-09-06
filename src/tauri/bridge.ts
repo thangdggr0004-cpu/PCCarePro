@@ -139,6 +139,8 @@ export const tauriBridge = {
 
   // ── Office Standardizer ────────────────────
   applyOfficeStandard: (options: { script: string; elevated?: boolean }) => safeInvoke('apply_office_standard', { options }),
+  getTpOfficeStatus: () => safeInvokeRaw('get_tp_office_status'),
+  installTpOfficeAddon: (addonType: string) => safeInvokeRaw('install_tp_office_addon', { addonType }),
 
   // ── Window Controls ────────────────────────
   windowMinimize: async () => {
