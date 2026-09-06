@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Shield, Zap, Battery, Play, Download, CheckCircle, Info, Activity, Settings, RefreshCw, AlertTriangle, Monitor, HardDrive, Cpu, Terminal, Wrench, X, Clock, Globe } from 'lucide-react';
 import ProgressBarComponent from './ProgressBarComponent.js';
 import { useTaskManager } from '../context/TaskManagerContext.js';
+import { useAppLicense } from '../context/AppLicenseContext.js';
 import { updateSessionReport } from '../utils/SessionAuditStore.js';
 
 type PowerModeType = 'battery' | 'balanced' | 'gaming' | 'performance' | 'ultimate';
@@ -83,6 +84,7 @@ const powerOptions: PowerModeOption[] = [
 ];
 
 export default function WindowsSettings() {
+  const { isLicensed, openActivationModal } = useAppLicense();
   const [activeMode, setActiveMode] = useState<PowerModeOption>(powerOptions[1]);
   const [applyingPower, setApplyingPower] = useState(false);
   const [appliedPowerSuccess, setAppliedPowerSuccess] = useState(false);
@@ -125,6 +127,10 @@ export default function WindowsSettings() {
   });
 
   const handleApplyAdvanced = async () => {
+    if (!isLicensed) {
+      openActivationModal();
+      return;
+    }
     setApplyingAdvanced(true);
     setAdvancedResult(null);
     try {

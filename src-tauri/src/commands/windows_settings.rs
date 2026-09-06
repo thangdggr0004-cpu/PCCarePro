@@ -803,6 +803,7 @@ pub fn apply_system_optimization(state: serde_json::Value) -> Result<(), String>
     restart_explorer()
 }
 
+#[allow(dead_code)]
 pub fn get_system_info() -> Result<serde_json::Value, String> {
     let ps = format!("{}\n    $s | ConvertTo-Json -Depth 3\n", super::startup::SYS_PS_BODY);
     let stdout = String::from_utf8_lossy(&exec::run_ps_raw(&ps).stdout).to_string();

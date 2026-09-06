@@ -18,7 +18,20 @@ import {
   PanelLeftOpen,
   Layers,
 } from 'lucide-react';
-import Tooltip from './ui/Tooltip.js';
+import { useAppLicense } from '../context/AppLicenseContext.js';
+
+export const LOCKED_TABS = new Set([
+  'cleaner',
+  'windows-settings',
+  'standardizer',
+  'network',
+  'printer',
+  'backup',
+  'bitlocker',
+  'activation',
+  'advanced-activation',
+  'ktv-report',
+]);
 
 interface SidebarProps {
   activeSection: string;
@@ -64,6 +77,7 @@ function Sidebar({
   isUnlocked,
 }: SidebarProps) {
 
+  const { isLicensed } = useAppLicense();
   const [collapsed, setCollapsed] = useState(false);
 
   const utilityItems = isUnlocked
@@ -80,6 +94,7 @@ function Sidebar({
 
   const renderItem = (item: MenuItem) => {
     const isActive = activeSection === item.id;
+    const isLockedItem = !isLicensed && LOCKED_TABS.has(item.id);
     const Icon = item.icon;
 
     const buttonContent = (
@@ -91,25 +106,41 @@ function Sidebar({
         } rounded-xl text-left transition-all duration-150 cursor-pointer relative group ${
           isActive
             ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm shadow-emerald-500/10'
+            : isLockedItem
+            ? 'text-slate-400 hover:text-slate-300 hover:bg-slate-800/40 border border-transparent'
             : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
         }`}
       >
         <span
-          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors relative ${
             isActive
               ? 'bg-emerald-500 text-slate-950 font-bold shadow-sm shadow-emerald-500/40'
+              : isLockedItem
+              ? 'bg-slate-800/50 text-slate-400 group-hover:text-amber-400 group-hover:bg-slate-800'
               : 'bg-slate-800/80 text-slate-400 group-hover:text-emerald-400 group-hover:bg-slate-800'
           }`}
         >
           <Icon className="h-4 w-4" />
+          {isLockedItem && (
+            <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#0b101d] rounded-full flex items-center justify-center">
+              <Lock className="w-2.5 h-2.5 text-amber-400" />
+            </span>
+          )}
         </span>
 
         {!collapsed && (
           <>
             <div className="flex-1 min-w-0">
-              <span className={`text-xs font-semibold block truncate ${isActive ? 'text-white' : ''}`}>
-                {item.name}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-xs font-semibold block truncate ${isActive ? 'text-white' : ''}`}>
+                  {item.name}
+                </span>
+                {isLockedItem && (
+                  <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/15 text-amber-400 font-mono font-bold leading-tight">
+                    PRO
+                  </span>
+                )}
+              </div>
               <span className={`text-[10px] block truncate ${isActive ? 'text-emerald-400/80' : 'text-slate-500'}`}>
                 {item.description}
               </span>

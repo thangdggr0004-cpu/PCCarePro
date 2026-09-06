@@ -13,6 +13,18 @@ Danh sách tất cả signing key đã tạo, map với pubkey tương ứng.
 | **Used in** | v2.0.4+ |
 | **tauri.conf.json** | ✅匹配 |
 
+## Offline App License Signing Key (Ed25519 - Riêng biệt với Update Key)
+
+| Field | Value |
+|---|---|
+| **Purpose** | Ký số file license offline `.lic` cho khách hàng mua PCCareMasterPro |
+| **Algorithm** | Ed25519 (RFC 8032 / Ring) |
+| **Public Key (Base64)** | `6cynZaSH1JN3cSmaPIk0cQ73KsqgRH4FgLV0gL8ZFBM=` |
+| **Key file** | `license-signing.key` |
+| **Public file** | `license-signing.pub` |
+| **Created** | 2026-09-06 |
+| **Status** | Active |
+
 ## Archive (key cũ, không dùng nữa)
 
 | Pubkey ID | Key file | Used in | Lý do ngưng |

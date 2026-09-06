@@ -269,6 +269,7 @@ pub fn run_cmd_quiet(exe: &str, args: &[&str]) -> Output {
         .unwrap_or_else(|_| ok_output())
 }
 
+#[allow(dead_code)]
 pub async fn run_ps_raw_async(script: &str) -> Output {
     let dir = std::env::temp_dir().join("tp_ps_scripts");
     let _ = std::fs::create_dir_all(&dir);

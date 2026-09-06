@@ -28,6 +28,7 @@ import {
   generateBlockOfficeUpdateScript
 } from '../utils/scriptGenerator.js';
 import { useTaskManager } from '../context/TaskManagerContext.js';
+import { useAppLicense } from '../context/AppLicenseContext.js';
 
 const UtilityCard = ({
   id, title, description, icon: Icon, onClick, colorClass, btnText,
@@ -118,7 +119,14 @@ export default function OfficeStandardizer() {
     loadTpStatus();
   }, []);
 
+  const { isLicensed, openActivationModal } = useAppLicense();
+  const { startTask, updateTask, completeTask, failTask } = useTaskManager();
+
   const handleInstallAddon = async (type: 'excel' | 'word') => {
+    if (!isLicensed) {
+      openActivationModal();
+      return;
+    }
     setInstallingAddon(type);
     setInstallResult(null);
     const title = type === 'excel' ? 'Cài Đặt TPExcel Pro' : 'Cài Đặt TPWord Pro';
@@ -146,8 +154,6 @@ export default function OfficeStandardizer() {
     }
   };
 
-  const { startTask, updateTask, completeTask, failTask } = useTaskManager();
-
   const executeUtility = async (
     scriptGenFunc: (args?: any) => string, 
     taskId: string, 
@@ -155,6 +161,10 @@ export default function OfficeStandardizer() {
     args?: any,
     elevated = false
   ) => {
+    if (!isLicensed) {
+      openActivationModal();
+      return;
+    }
     setActiveTask(taskId);
     setSuccessTask(null);
     setIsLoading(true);

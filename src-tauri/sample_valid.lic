@@ -1,0 +1,11 @@
+{
+  "payload": {
+    "product": "PCCareMasterPro",
+    "customer": "Nguyen Van A",
+    "issued_at": "2026-09-06T06:08:05Z",
+    "license_id": "TP-LIC-0D8213",
+    "license_type": "lifetime",
+    "notes": "Mua dut vinh vien"
+  },
+  "signature": "bWNGBYYsdreoblGH/ZzMGHywiY6iHJr7ns0SQWRA+jR/Szcb2NsbTmYBaHOjceg1G8ughj+RtCbqLeqK5mvvBg=="
+}

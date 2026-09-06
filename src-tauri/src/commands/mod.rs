@@ -11,3 +11,4 @@ pub mod startup;
 pub mod temp;
 pub mod windows_settings;
 pub mod office_addons;
+pub mod app_license;

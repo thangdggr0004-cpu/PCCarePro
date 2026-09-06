@@ -5,9 +5,22 @@ description = "Thien Phat Tech Toolkit Pro (Tauri)"
 authors = ["Thien Phat Tech"]
 license = "MIT"
 repository = "https://github.com/thangdggr0004-cpu/PCCarePro"
+default-run = "pccare-master-pro"
 edition = "2021"
 
 rust-version = "1.77.2"
+
+[[bin]]
+name = "pccare-master-pro"
+path = "src/main.rs"
+
+[[bin]]
+name = "licgen"
+path = "src/bin/licgen.rs"
+
+[[bin]]
+name = "test_license_scenarios"
+path = "src/bin/test_license_scenarios.rs"
 
 [lib]
 name = "app_lib"
@@ -25,6 +38,8 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "blocking", "rustls-no-provider"] }
 rustls = { version = "0.23", features = ["ring"], default-features = false }
+ring = "0.17"
+base64 = "0.22"
 open = "5"
 tokio = { version = "1", features = ["process", "macros", "sync", "time", "rt", "rt-multi-thread"] }
 

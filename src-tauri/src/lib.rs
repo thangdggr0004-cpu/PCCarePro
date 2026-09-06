@@ -1,4 +1,4 @@
-mod commands;
+pub mod commands;
 
 use commands::{activation, exec, hardware, network, power, printer, singleflight, startup, temp, windows_settings};
 use std::sync::{Mutex, OnceLock};
@@ -850,6 +850,38 @@ async fn install_tp_office_addon(addon_type: String) -> Result<serde_json::Value
         .map_err(|e| e.to_string())?
 }
 
+// ── App Offline License ───────────────────────
+
+#[tauri::command]
+async fn get_app_license_status() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| {
+        let status = commands::app_license::check_app_license();
+        serde_json::to_value(status).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn import_app_license(content: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let status = commands::app_license::import_app_license(&content)?;
+        serde_json::to_value(status).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn remove_app_license() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| {
+        commands::app_license::remove_app_license()?;
+        Ok(serde_json::json!({ "success": true, "message": "Đã gỡ bỏ bản quyền thành công." }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ── Dialogs ───────────────────────────────────
 
 #[tauri::command]
@@ -995,6 +1027,9 @@ verify_bios_restore,
             apply_office_standard,
             get_tp_office_status,
             install_tp_office_addon,
+            get_app_license_status,
+            import_app_license,
+            remove_app_license,
             show_info_dialog,
             show_confirm_dialog,
 create_system_restore_point,

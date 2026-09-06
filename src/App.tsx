@@ -48,6 +48,10 @@ import AutoUpdater from './components/AutoUpdater.js';
 import { TaskManagerProvider } from './context/TaskManagerContext.js';
 import GlobalTaskBar from './components/GlobalTaskBar.js';
 import { CoreProvider } from './context/CoreContext.js';
+import { AppLicenseProvider, useAppLicense } from './context/AppLicenseContext.js';
+import TrialNoticeBanner from './components/ui/TrialNoticeBanner.js';
+import LockedFeatureScreen from './components/ui/LockedFeatureScreen.js';
+import { LOCKED_TABS } from './components/Sidebar.js';
 
 // Skeleton fallback shown while lazy component loads
 function PageSkeleton() {
@@ -115,7 +119,8 @@ const AppFooter = React.memo(function AppFooter() {
   );
 });
 
-export default function App() {
+function MainAppContent() {
+  const { isLicensed } = useAppLicense();
   type SectionId =
     | 'dashboard'
     | 'activation'
@@ -248,9 +253,11 @@ export default function App() {
     });
   }, [activeSection]);
 
-  const renderSection = (id: SectionId, node: React.ReactNode) => {
+  const renderSection = (id: SectionId, node: React.ReactNode, featureName?: string) => {
     if (!visitedSections.has(id)) return null;
     const isActive = activeSection === id;
+    const isLocked = !isLicensed && LOCKED_TABS.has(id);
+
     return (
       <div
         key={id}
@@ -259,72 +266,89 @@ export default function App() {
         aria-hidden={!isActive}
       >
         <Suspense fallback={<PageSkeleton />}>
-          <PageWrapper>{node}</PageWrapper>
+          <PageWrapper>
+            {isLocked ? (
+              <LockedFeatureScreen
+                featureName={featureName}
+                onNavigateHome={() => setActiveSection('dashboard')}
+              />
+            ) : (
+              node
+            )}
+          </PageWrapper>
         </Suspense>
       </div>
     );
   };
 
   return (
+    <div className="h-screen w-screen bg-[#0b0f19] text-slate-200 font-sans flex flex-col overflow-hidden select-none">
+      {/* Custom Windows Drag TitleBar */}
+      <TitleBar />
+
+      {/* Top Search & Actions Toolbar */}
+      <TopToolbar
+        onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onNavigate={(sec) => setActiveSection(sec as any)}
+      />
+
+      {/* Main Body: Left Sidebar + Center Workspace */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        {/* Left Navigation Sidebar */}
+        <Sidebar
+          activeSection={activeSection}
+          setActiveSection={setActiveSection}
+          isUnlocked={isUnlocked}
+        />
+
+        {/* Main Content Workspace */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-[#0b0f19] relative">
+          <TrialNoticeBanner />
+          {renderSection('dashboard', <Dashboard onNavigate={setActiveSection} />, 'Trang Chủ')}
+          {renderSection('activation', <LicenseManager />, 'Quản Lý Bản Quyền')}
+          {renderSection('hardware', <HardwareDetails />, 'Cấu Hình Chi Tiết')}
+          {renderSection('cleaner', <JunkCleaner />, 'Dọn Dẹp Rác')}
+          {renderSection('network', <NetworkConfig />, 'Mạng & DNS')}
+          {renderSection('bitlocker', <BitLockerManager />, 'Quản Lý BitLocker')}
+          {renderSection('standardizer', <OfficeStandardizer />, 'Tiện Ích Office')}
+          {renderSection('windows-settings', <WindowsSettings />, 'Thiết Lập Windows')}
+          {renderSection('backup', <BackupManager />, 'Sao Lưu Dữ Liệu')}
+          {renderSection('printer', <PrinterUtils />, 'Tiện Ích Máy In')}
+          {renderSection('laptop-tester', <LaptopTester />, 'Kiểm Tra Laptop')}
+          {renderSection('touch-tester', <TouchScreenTester />, 'Kiểm Tra Màn Cảm Ứng')}
+          {renderSection('advanced-activation', <AdvancedActivation />, 'Tiện Ích Nâng Cao (MAS)')}
+          {renderSection('ktv-report', <JobReportViewer />, 'Báo Cáo Nghiệm Thu KTV')}
+        </main>
+      </div>
+
+      {/* App Status Footer */}
+      <AppFooter />
+
+      {/* Global Modals & Tasks */}
+      <CommandPalette
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        onNavigate={(sec) => setActiveSection(sec as SectionId)}
+      />
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
+      <AutoUpdater />
+      <GlobalTaskBar onNavigateTab={(tab) => setActiveSection(tab as SectionId)} />
+    </div>
+  );
+}
+
+export default function App() {
+  return (
     <CoreProvider>
-      <TaskManagerProvider>
-        <div className="h-screen w-screen bg-[#0b0f19] text-slate-200 font-sans flex flex-col overflow-hidden select-none">
-          {/* Custom Windows Drag TitleBar */}
-          <TitleBar />
-
-          {/* Top Search & Actions Toolbar */}
-          <TopToolbar
-            onOpenSearch={() => setIsSearchOpen(true)}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-            onNavigate={(sec) => setActiveSection(sec as any)}
-          />
-
-          {/* Main Body: Left Sidebar + Center Workspace */}
-          <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-            {/* Left Navigation Sidebar */}
-            <Sidebar
-              activeSection={activeSection}
-              setActiveSection={setActiveSection}
-              isUnlocked={isUnlocked}
-            />
-
-
-            {/* Main Content Workspace */}
-            <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-[#0b0f19] relative">
-              {renderSection('dashboard', <Dashboard onNavigate={setActiveSection} />)}
-              {renderSection('activation', <LicenseManager />)}
-              {renderSection('hardware', <HardwareDetails />)}
-              {renderSection('cleaner', <JunkCleaner />)}
-              {renderSection('network', <NetworkConfig />)}
-              {renderSection('bitlocker', <BitLockerManager />)}
-              {renderSection('standardizer', <OfficeStandardizer />)}
-              {renderSection('windows-settings', <WindowsSettings />)}
-              {renderSection('backup', <BackupManager />)}
-              {renderSection('printer', <PrinterUtils />)}
-              {renderSection('laptop-tester', <LaptopTester />)}
-              {renderSection('touch-tester', <TouchScreenTester />)}
-              {renderSection('advanced-activation', <AdvancedActivation />)}
-              {renderSection('ktv-report', <JobReportViewer />)}
-            </main>
-          </div>
-
-          {/* App Status Footer */}
-          <AppFooter />
-        </div>
-
-        {/* Global Modals & Tasks */}
-        <CommandPalette
-          isOpen={isSearchOpen}
-          onClose={() => setIsSearchOpen(false)}
-          onNavigate={(sec) => setActiveSection(sec as SectionId)}
-        />
-        <SettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-        />
-        <AutoUpdater />
-        <GlobalTaskBar onNavigateTab={(tab) => setActiveSection(tab as SectionId)} />
-      </TaskManagerProvider>
+      <AppLicenseProvider>
+        <TaskManagerProvider>
+          <MainAppContent />
+        </TaskManagerProvider>
+      </AppLicenseProvider>
     </CoreProvider>
   );
 }

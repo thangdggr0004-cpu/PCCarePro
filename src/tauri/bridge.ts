@@ -142,6 +142,11 @@ export const tauriBridge = {
   getTpOfficeStatus: () => safeInvokeRaw('get_tp_office_status'),
   installTpOfficeAddon: (addonType: string) => safeInvokeRaw('install_tp_office_addon', { addonType }),
 
+  // ── App Offline License ────────────────────
+  getAppLicenseStatus: () => safeInvokeRaw('get_app_license_status'),
+  importAppLicense: (content: string) => safeInvokeRaw('import_app_license', { content }),
+  removeAppLicense: () => safeInvokeRaw('remove_app_license'),
+
   // ── Window Controls ────────────────────────
   windowMinimize: async () => {
     try {

@@ -12,6 +12,8 @@ src-tauri/mykey_nopw.key.pub
 # Signing keys - NEVER commit
 *.key
 *.key.sig
+*.priv
+license-signing.priv
 mykey*
 updater*
 

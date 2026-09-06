@@ -3,9 +3,12 @@ import {
   Search,
   BookOpen,
   Settings,
+  Award,
+  Key,
 } from 'lucide-react';
 import Tooltip from './ui/Tooltip.js';
 import UserGuideModal from './UserGuideModal.js';
+import { useAppLicense } from '../context/AppLicenseContext.js';
 
 interface TopToolbarProps {
   onOpenSearch: () => void;
@@ -19,11 +22,12 @@ export default function TopToolbar({
   onNavigate,
 }: TopToolbarProps) {
   const [showUserGuide, setShowUserGuide] = useState(false);
+  const { isLicensed, customerName, openActivationModal } = useAppLicense();
 
   return (
     <header className="w-full h-14 bg-[#0d1424] border-b border-slate-800/80 px-4 md:px-6 flex items-center justify-between shrink-0 relative z-30 select-none">
       {/* ── Left: Brand Header (PC CARE MASTER PRO SUITE) ── */}
-      <div className="flex items-center gap-2.5 w-52 md:w-56 lg:w-60 shrink-0">
+      <div className="flex items-center gap-2.5 shrink-0">
         <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shrink-0 shadow-md shadow-emerald-500/20">
           <div className="w-4 h-4 border-2 border-white rounded-[3px] rotate-45 flex items-center justify-center">
             <div className="w-1.5 h-1.5 bg-white rounded-full" />
@@ -58,7 +62,31 @@ export default function TopToolbar({
       </div>
 
       {/* ── Right Controls ── */}
-      <div className="flex items-center gap-2 md:gap-3 w-52 md:w-56 lg:w-60 justify-end shrink-0">
+      <div className="flex items-center gap-2 md:gap-3 shrink-0 justify-end">
+        {/* License Badge */}
+        {isLicensed ? (
+          <Tooltip content={`Đã kích hoạt bản quyền vĩnh viễn cho: ${customerName}\nBấm để xem thông tin`} position="bottom">
+            <button
+              onClick={openActivationModal}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 rounded-xl text-xs font-semibold cursor-pointer transition max-w-[220px]"
+            >
+              <Award className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="truncate">Đã kích hoạt cho: <strong className="text-white font-bold">{customerName}</strong></span>
+            </button>
+          </Tooltip>
+        ) : (
+          <Tooltip content="Chế độ dùng thử chẩn đoán. Bấm để nhập mã CDKey kích hoạt mở khóa vĩnh viễn" position="bottom">
+            <button
+              onClick={openActivationModal}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 rounded-xl text-xs font-bold cursor-pointer transition animate-pulse"
+            >
+              <Key className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span className="hidden sm:inline">Chưa kích hoạt</span>
+              <span className="sm:hidden">Trial</span>
+            </button>
+          </Tooltip>
+        )}
+
         {/* User Guide Button */}
         <Tooltip content="Cẩm nang hướng dẫn sử dụng tool" position="bottom">
           <button
