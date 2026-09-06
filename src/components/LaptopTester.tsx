@@ -88,14 +88,15 @@ function TestModal({ test, onClose }: { test: string, onClose: () => void }) {
     };
   }, [test]);
 
-  // Handle ESC
+  // Handle ESC (except keyboard test which handles Escape internally to test the key)
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
+      if (test === 'keyboard') return;
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose]);
+  }, [onClose, test]);
 
   return (
     <div className="fixed inset-0 z-[100] bg-[#0b0f19] flex flex-col items-center justify-center select-none animate-fade-in">
@@ -146,6 +147,8 @@ function KeyboardTest({ onClose }: { onClose?: () => void }) {
   const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set());
   const [currentKey, setCurrentKey] = useState<string>('');
   const [layout, setLayout] = useState<'laptop' | 'full' | 'mac'>('full');
+  const [escPrompt, setEscPrompt] = useState<boolean>(false);
+  const escTimerRef = useRef<any>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -157,10 +160,29 @@ function KeyboardTest({ onClose }: { onClose?: () => void }) {
         newSet.add(keyStr);
         return newSet;
       });
+
+      // Double-press ESC logic: 1st press tests key, 2nd press within 1.5s exits test
+      if (e.key === 'Escape' || e.code === 'Escape') {
+        if (escTimerRef.current) {
+          clearTimeout(escTimerRef.current);
+          escTimerRef.current = null;
+          setEscPrompt(false);
+          if (onClose) onClose();
+        } else {
+          setEscPrompt(true);
+          escTimerRef.current = setTimeout(() => {
+            escTimerRef.current = null;
+            setEscPrompt(false);
+          }, 1500);
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (escTimerRef.current) clearTimeout(escTimerRef.current);
+    };
+  }, [onClose]);
 
   const renderKey = (code: string, label?: string, flex?: string, height?: string) => {
     const isPressed = pressedKeys.has(code);
@@ -227,13 +249,21 @@ function KeyboardTest({ onClose }: { onClose?: () => void }) {
           {onClose && (
             <button
               onClick={onClose}
-              className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500 hover:text-slate-950 text-rose-400 border border-rose-500/30 rounded-lg text-[11px] font-bold transition cursor-pointer active:scale-95"
+              className="px-3.5 py-1.5 bg-rose-500/20 hover:bg-rose-500 hover:text-slate-950 text-rose-400 border border-rose-500/30 rounded-lg text-[11px] font-bold transition cursor-pointer active:scale-95 flex items-center gap-1"
+              title="Bấm để đóng bộ kiểm tra bàn phím"
             >
-              ❌ Thoát (ESC)
+              <span>❌ Thoát</span>
             </button>
           )}
         </div>
       </div>
+
+      {/* ESC Exit Prompt / Notice */}
+      {escPrompt && (
+        <div className="mb-2 px-4 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-semibold animate-pulse shadow-md">
+          ⚠️ Đã nhận phím ESC. Nhấn ESC thêm 1 lần nữa để thoát, hoặc bấm nút &quot;Thoát&quot; ở trên.
+        </div>
+      )}
 
       {/* Current Key Indicator */}
       <div className="mb-3 text-center">
@@ -244,7 +274,7 @@ function KeyboardTest({ onClose }: { onClose?: () => void }) {
               <span className="bg-[#131d33] px-3 py-0.5 rounded-lg border border-slate-700 shadow-sm text-emerald-400 font-mono text-sm">{currentKey}</span>
             </>
           ) : (
-            <span className="text-xs text-slate-500 font-sans">Gõ bất kỳ phím nào để bắt đầu test...</span>
+            <span className="text-xs text-slate-500 font-sans">Gõ bất kỳ phím nào để bắt đầu test (kể cả phím Esc)...</span>
           )}
         </div>
       </div>

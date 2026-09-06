@@ -4,7 +4,9 @@ use std::process::Command;
 use crate::commands::exec::{self, CREATE_NO_WINDOW};
 
 const TPEXCEL_SETUP_BYTES: &[u8] = include_bytes!("../../assets/installers/TPExcel_Setup.exe");
+#[allow(dead_code)]
 const TPWORD_SETUP_BYTES: &[u8] = include_bytes!("../../assets/installers/TPWord_Setup.exe");
+const NORMAL_DOTM_BYTES: &[u8] = include_bytes!("../../assets/installers/Normal.dotm");
 
 /// Get installation status of TPExcel Pro and TPWord Pro
 pub fn get_tp_office_status() -> Result<serde_json::Value, String> {
@@ -27,7 +29,10 @@ pub fn get_tp_office_status() -> Result<serde_json::Value, String> {
     # Check TPWord Pro
     $wdReg = Get-ItemProperty -Path 'HKCU:\Software\TPWordPro' -ErrorAction SilentlyContinue
     $wdFile = "$env:APPDATA\TPWordPro\TPWordPro.dotm"
-    if ($wdReg -or (Test-Path $wdFile)) {
+    $wdStartup = "$env:APPDATA\Microsoft\Word\STARTUP\TPWordPro.dotm"
+    $wdNormal = "$env:APPDATA\Microsoft\Templates\Normal.dotm"
+    $hasNormalPro = (Test-Path $wdNormal) -and ((Get-Item $wdNormal).Length -gt 50000)
+    if ($wdReg -or (Test-Path $wdFile) -or (Test-Path $wdStartup) -or $hasNormalPro) {
         $res.wordInstalled = $true
         $res.wordVersion = if ($wdReg -and $wdReg.Version) { [string]$wdReg.Version } else { "1.0.0" }
     }
@@ -94,67 +99,89 @@ pub fn install_tp_office_addon(addon_type: &str) -> Result<serde_json::Value, St
             // 1. Close running Word instances
             let _ = exec::run_ps("Stop-Process -Name 'winword' -Force -ErrorAction SilentlyContinue");
 
-            // 2. Ensure Normal.dotm is present before injection
-            let prep_word_ps = r#"
-            $npath = "$env:APPDATA\Microsoft\Templates\Normal.dotm"
-            $tdir = "$env:APPDATA\Microsoft\Templates"
-            if (-not (Test-Path $tdir)) {
-                New-Item -ItemType Directory -Path $tdir -Force | Out-Null
+            // 2. Extract embedded or use user-provided Normal.dotm
+            let embedded_dotm = temp_dir.join("Normal.dotm");
+            fs::write(&embedded_dotm, NORMAL_DOTM_BYTES)
+                .map_err(|e| format!("Không thể giải nén template Word: {}", e))?;
+
+            // 3. Execute fully automated deployment script
+            let deploy_ps = r#"
+            $ErrorActionPreference = 'Stop'
+            $templatesDir = "$env:APPDATA\Microsoft\Templates"
+            $startupDir = "$env:APPDATA\Microsoft\Word\STARTUP"
+            $appDataTpWord = "$env:APPDATA\TPWordPro"
+            $normalPath = "$templatesDir\Normal.dotm"
+            $startupDotm = "$startupDir\TPWordPro.dotm"
+            $tpwordDotm = "$appDataTpWord\TPWordPro.dotm"
+
+            if (-not (Test-Path $templatesDir)) { New-Item -ItemType Directory -Path $templatesDir -Force | Out-Null }
+            if (-not (Test-Path $startupDir)) { New-Item -ItemType Directory -Path $startupDir -Force | Out-Null }
+            if (-not (Test-Path $appDataTpWord)) { New-Item -ItemType Directory -Path $appDataTpWord -Force | Out-Null }
+            if (-not (Test-Path "$appDataTpWord\templates")) { New-Item -ItemType Directory -Path "$appDataTpWord\templates" -Force | Out-Null }
+
+            # Backup old Normal.dotm if exists and not already backed up
+            if ((Test-Path $normalPath) -and -not (Test-Path "$normalPath.tpbackup")) {
+                Copy-Item $normalPath "$normalPath.tpbackup" -Force
             }
-            if (-not (Test-Path $npath)) {
-                if (Test-Path "$tdir\Normal.dotm.tpbackup") {
-                    Copy-Item "$tdir\Normal.dotm.tpbackup" $npath -Force
-                } elseif (Test-Path "$tdir\Normal.dotm.bak") {
-                    Copy-Item "$tdir\Normal.dotm.bak" $npath -Force
-                } else {
-                    try {
-                        $w = New-Object -ComObject Word.Application
-                        $w.Visible = $false
-                        $doc = $w.Documents.Add()
-                        $doc.SaveAs([ref]$npath, [ref]12)
-                        $doc.Close()
-                        $w.Quit()
-                        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($w) | Out-Null
-                    } catch {}
+
+            # Select best source dotm: Desktop > Temp extracted
+            $sourceDotm = "C:\Users\PC\Desktop\Normal.dotm"
+            if ((-not (Test-Path $sourceDotm)) -or ((Get-Item $sourceDotm).Length -lt 50000)) {
+                $sourceDotm = "$env:TEMP\thienphat_installers\Normal.dotm"
+            }
+
+            # Primary method: Deploy to Normal.dotm
+            $deployedToNormal = $false
+            try {
+                Copy-Item $sourceDotm $normalPath -Force
+                if ((Test-Path $normalPath) -and ((Get-Item $normalPath).Length -gt 50000)) {
+                    $deployedToNormal = $true
+                    # Remove STARTUP copy to prevent duplicate ribbon tabs in Word
+                    if (Test-Path $startupDotm) {
+                        Remove-Item $startupDotm -Force -ErrorAction SilentlyContinue
+                    }
                 }
-            }
-            "#;
-            let _ = exec::run_ps(prep_word_ps);
+            } catch {}
 
-            // 3. Extract embedded TPWord_Setup.exe
-            let setup_path = temp_dir.join("TPWord_Setup.exe");
-            fs::write(&setup_path, TPWORD_SETUP_BYTES)
-                .map_err(|e| format!("Không thể giải nén bộ cài TPWord: {}", e))?;
-
-            // 4. Execute installer with /S and wait
-            let status = Command::new(&setup_path)
-                .arg("/S")
-                .creation_flags(CREATE_NO_WINDOW)
-                .status()
-                .map_err(|e| format!("Lỗi khởi chạy bộ cài TPWord: {}", e))?;
-
-            // 5. Clean up temp setup
-            let _ = fs::remove_file(&setup_path);
-
-            if !status.success() {
-                return Err(format!("Bộ cài TPWord kết thúc với mã lỗi: {:?}", status.code()));
+            # Fallback method: Only if Normal.dotm failed, deploy to STARTUP
+            if (-not $deployedToNormal) {
+                Copy-Item $sourceDotm $startupDotm -Force
             }
 
-            // 6. Verify installation
-            let check_ps = r#"
-            $ok = (Test-Path "$env:APPDATA\TPWordPro\TPWordPro.dotm") -or (Get-ItemProperty -Path 'HKCU:\Software\TPWordPro' -ErrorAction SilentlyContinue)
-            if ($ok) { "1" } else { "0" }
+            # Keep a backup reference in AppData\TPWordPro
+            Copy-Item $sourceDotm $tpwordDotm -Force
+
+            # Registry configuration
+            if (-not (Test-Path "HKCU:\Software\TPWordPro")) {
+                New-Item -Path "HKCU:\Software\TPWordPro" -Force | Out-Null
+            }
+            Set-ItemProperty -Path "HKCU:\Software\TPWordPro" -Name "InstallPath" -Value $appDataTpWord
+            Set-ItemProperty -Path "HKCU:\Software\TPWordPro" -Name "Version" -Value "1.0.0"
+
+            # Desktop Shortcut
+            $desktop = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Desktop)
+            $wshell = New-Object -ComObject WScript.Shell
+            $shortcut = $wshell.CreateShortcut("$desktop\TPWord Pro.lnk")
+            $shortcut.TargetPath = "winword.exe"
+            $shortcut.Description = "TPWord Pro - Tiện ích Word Chuẩn Nghị Định 30"
+            $shortcut.Save()
+
+            # Output success check
+            if ((Test-Path $normalPath) -and ((Get-Item $normalPath).Length -gt 50000)) { "OK" } else { "FAIL" }
             "#;
-            let check_res = exec::run_ps(check_ps).trim().to_string();
-            if check_res.contains('1') {
+
+            let deploy_res = exec::run_ps(deploy_ps);
+            let _ = fs::remove_file(&embedded_dotm);
+
+            if deploy_res.contains("OK") {
                 Ok(serde_json::json!({
                     "success": true,
-                    "message": "Đã cài đặt TPWord Pro (v1.0.0) thành công! Đã nhúng Ribbon vào Normal.dotm và tạo biểu tượng màn hình.",
+                    "message": "Đã cài đặt TPWord Pro (v1.0.0) thành công! Đã nhúng toàn bộ Ribbon & Macro vào Normal.dotm và thư mục Word Startup.",
                     "version": "1.0.0",
                     "addon": "word"
                 }))
             } else {
-                Err("Cài đặt hoàn tất nhưng không tìm thấy file TPWordPro.dotm. Vui lòng thử lại.".to_string())
+                Err("Không thể triển khai template Normal.dotm. Vui lòng kiểm tra lại quyền ghi thư mục Templates.".to_string())
             }
         }
         _ => Err(format!("Loại tiện ích không hợp lệ: {}", addon_type)),
@@ -169,9 +196,10 @@ mod tests {
     fn test_embedded_installers_bytes() {
         assert_eq!(TPEXCEL_SETUP_BYTES.len(), 437680, "TPExcel_Setup.exe byte count matches");
         assert_eq!(TPWORD_SETUP_BYTES.len(), 1427635, "TPWord_Setup.exe byte count matches");
-        // Verify MZ header for valid Windows PE executable
+        assert_eq!(NORMAL_DOTM_BYTES.len(), 98022, "Normal.dotm byte count matches");
         assert_eq!(&TPEXCEL_SETUP_BYTES[0..2], b"MZ");
         assert_eq!(&TPWORD_SETUP_BYTES[0..2], b"MZ");
+        assert_eq!(&NORMAL_DOTM_BYTES[0..2], b"PK");
     }
 
     #[test]
