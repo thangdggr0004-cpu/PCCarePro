@@ -5,6 +5,75 @@ use ring::signature::{self, KeyPair};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 
+// ── Revocation List Types ─────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RevokedEntry {
+    pub id: String,
+    pub customer: String,
+    pub revoked_at: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RevocationList {
+    pub version: u32,
+    pub updated_at: String,
+    pub revoked: Vec<RevokedEntry>,
+    pub signature: String,
+}
+
+/// Canonical string for signing the revocation list:
+/// "version=1&updated_at=...&revoked_count=N&ids=ID1,ID2,..." (IDs sorted ascending)
+pub fn canonical_revocation_bytes(version: u32, updated_at: &str, ids: &[String]) -> Vec<u8> {
+    let mut sorted_ids = ids.to_vec();
+    sorted_ids.sort();
+    let ids_str = sorted_ids.join(",");
+    format!(
+        "version={}&updated_at={}&revoked_count={}&ids={}",
+        version, updated_at.trim(), ids.len(), ids_str
+    ).into_bytes()
+}
+
+/// Sign a revocation list with the Ed25519 private key. Returns the updated list with new signature.
+fn sign_revocation_list(list: &mut RevocationList, key_pair: &signature::Ed25519KeyPair) {
+    let ids: Vec<String> = list.revoked.iter().map(|e| e.id.clone()).collect();
+    let msg = canonical_revocation_bytes(list.version, &list.updated_at, &ids);
+    let sig = key_pair.sign(&msg);
+    list.signature = BASE64_STANDARD.encode(sig.as_ref());
+}
+
+/// Load the revoked.json from the repo root (next to revocation/revoked.json)
+fn get_revocation_file_path() -> PathBuf {
+    // Try next to exe, then src-tauri, then repo root
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let candidate = exe_dir.join("revocation").join("revoked.json");
+            if candidate.exists() { return candidate; }
+        }
+    }
+    let repo_root = get_repo_root();
+    repo_root.join("revocation").join("revoked.json")
+}
+
+/// Load existing revocation list or create a new empty one
+fn load_or_create_revocation_list() -> RevocationList {
+    let path = get_revocation_file_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(list) = serde_json::from_str::<RevocationList>(&content) {
+                return list;
+            }
+        }
+    }
+    RevocationList {
+        version: 1,
+        updated_at: chrono_or_fallback_timestamp(),
+        revoked: Vec::new(),
+        signature: String::new(),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LicensePayload {
     pub product: String,
@@ -374,6 +443,89 @@ fn run_interactive_mode() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn revoke_license(license_id: &str, customer: &str, reason: &str, auto_push: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let key_path = get_key_path();
+    if !key_path.exists() {
+        return Err(format!("Không tìm thấy private key tại: {}\nHãy chạy lệnh tạo khóa trước.", key_path.display()).into());
+    }
+    let pkcs8_bytes = fs::read(&key_path)?;
+    let key_pair = signature::Ed25519KeyPair::from_pkcs8(&pkcs8_bytes)
+        .map_err(|e| format!("Lỗi phân tích khóa PKCS#8: {:?}", e))?;
+
+    let mut list = load_or_create_revocation_list();
+
+    // Check if already revoked
+    if list.revoked.iter().any(|e| e.id.eq_ignore_ascii_case(license_id)) {
+        println!("[!] Mã {} đã có trong danh sách thu hồi trước đó.", license_id);
+        return Ok(());
+    }
+
+    let now = chrono_or_fallback_timestamp();
+    list.revoked.push(RevokedEntry {
+        id: license_id.trim().to_uppercase(),
+        customer: customer.trim().to_string(),
+        revoked_at: now.clone(),
+        reason: if reason.trim().is_empty() { "Không có lý do cụ thể.".to_string() } else { reason.trim().to_string() },
+    });
+    list.updated_at = now;
+
+    // Re-sign the whole list
+    sign_revocation_list(&mut list, &key_pair);
+
+    // Write to file
+    let revocation_path = get_revocation_file_path();
+    if let Some(parent) = revocation_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&list)?;
+    fs::write(&revocation_path, json.as_bytes())?;
+
+    println!("[OK] Đã thu hồi mã bản quyền thành công!");
+    println!("     Mã bị thu hồi:  {}", license_id);
+    println!("     Khách hàng:      {}", customer);
+    println!("     Lý do:           {}", reason);
+    println!("     Tổng thu hồi:    {} mã", list.revoked.len());
+    println!("     File:            {}", revocation_path.display());
+
+    if auto_push {
+        println!();
+        println!("[GIT] Đang đẩy danh sách thu hồi lên GitHub...");
+        let repo_root = get_repo_root();
+        let _ = std::process::Command::new("git")
+            .args(["add", "revocation/revoked.json"])
+            .current_dir(&repo_root)
+            .output();
+        let commit_msg = format!("revoke: thu hồi {} ({})", license_id, customer);
+        let _ = std::process::Command::new("git")
+            .args(["commit", "-m", &commit_msg])
+            .current_dir(&repo_root)
+            .output();
+        let push_out = std::process::Command::new("git")
+            .args(["push", "origin", "master"])
+            .current_dir(&repo_root)
+            .output();
+        match push_out {
+            Ok(p) if p.status.success() => {
+                println!("[GIT] Push lên GitHub thành công!");
+            }
+            Ok(p) => {
+                eprintln!("[GIT] Push thất bại: {}", String::from_utf8_lossy(&p.stderr));
+            }
+            Err(e) => {
+                eprintln!("[GIT] Không thể chạy git: {}. Hãy tự push thủ công.", e);
+            }
+        }
+    } else {
+        println!();
+        println!("[NEXT] Để áp dụng thu hồi lên GitHub, hãy chạy:");
+        println!("       git add revocation/revoked.json");
+        println!("       git commit -m \"revoke: {}\"", license_id);
+        println!("       git push origin master");
+    }
+
+    Ok(())
+}
+
 fn print_usage() {
     println!("=== PCCareMasterPro License Generator (Internal Tool) ===");
     println!("Cách dùng:");
@@ -384,6 +536,9 @@ fn print_usage() {
     println!();
     println!("  licgen issue --customer \"<Tên Khách Hàng>\" [--out <path.lic>]");
     println!("      Xuất file license .lic truyền thống.");
+    println!();
+    println!("  licgen revoke --id <TP-LIC-XXXXXX> --customer \"<Tên>\" [--reason \"Lý do\"] [--push]");
+    println!("      Thu hồi một mã bản quyền, ký số danh sách, và tùy chọn push lên GitHub.");
     println!();
     println!("  licgen generate-key");
     println!("      Tạo cặp khóa ký mới (Ed25519) lưu vào license-signing.key");
@@ -488,6 +643,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             issue_license(&customer, out_path.as_deref(), &license_type, &notes)?;
+        }
+        "revoke" => {
+            let mut license_id = String::new();
+            let mut customer = String::new();
+            let mut reason = String::new();
+            let mut auto_push = false;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--id" | "-i" => {
+                        if i + 1 < args.len() {
+                            license_id = args[i + 1].trim_matches(&['"', '\''][..]).to_string();
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--customer" | "-c" => {
+                        let mut words = Vec::new();
+                        i += 1;
+                        while i < args.len() && !args[i].starts_with('-') {
+                            words.push(args[i].clone());
+                            i += 1;
+                        }
+                        customer = words.join(" ").trim_matches(&['"', '\''][..]).to_string();
+                        continue;
+                    }
+                    "--reason" | "-r" => {
+                        let mut words = Vec::new();
+                        i += 1;
+                        while i < args.len() && !args[i].starts_with('-') {
+                            words.push(args[i].clone());
+                            i += 1;
+                        }
+                        reason = words.join(" ").trim_matches(&['"', '\''][..]).to_string();
+                        continue;
+                    }
+                    "--push" => {
+                        auto_push = true;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            if license_id.trim().is_empty() {
+                eprintln!("[ERROR] Thiếu mã license ID. Cú pháp: licgen revoke --id TP-LIC-XXXXXX --customer \"Tên\"");
+                std::process::exit(1);
+            }
+            if customer.trim().is_empty() {
+                eprintln!("[ERROR] Thiếu tên khách hàng. Cú pháp: licgen revoke --id TP-LIC-XXXXXX --customer \"Tên\"");
+                std::process::exit(1);
+            }
+
+            revoke_license(&license_id, &customer, &reason, auto_push)?;
         }
         _ => {
             print_usage();
