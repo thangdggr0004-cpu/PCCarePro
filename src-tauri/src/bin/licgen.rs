@@ -74,6 +74,296 @@ fn load_or_create_revocation_list() -> RevocationList {
     }
 }
 
+// ── Key History & GitHub Secret Gist Sync ─────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyHistoryEntry {
+    pub id: String,
+    pub customer: String,
+    pub cdkey: String,
+    pub issued_at: String,
+    pub platform: String,
+    #[serde(default)]
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LicGenConfig {
+    #[serde(default)]
+    pub github_token: String,
+    #[serde(default)]
+    pub gist_id: String,
+}
+
+fn get_config_path() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let next_to_exe = exe_dir.join("licgen_config.json");
+            if next_to_exe.exists() {
+                return next_to_exe;
+            }
+        }
+    }
+    let repo_root = get_repo_root();
+    let repo_config = repo_root.join("licgen_config.json");
+    if repo_config.exists() {
+        return repo_config;
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let tp_dir = PathBuf::from(appdata).join("ThienPhatTech");
+        let _ = fs::create_dir_all(&tp_dir);
+        let appdata_config = tp_dir.join("licgen_config.json");
+        if appdata_config.exists() {
+            return appdata_config;
+        }
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            return exe_dir.join("licgen_config.json");
+        }
+    }
+    repo_config
+}
+
+fn load_config() -> LicGenConfig {
+    let path = get_config_path();
+    let mut config = if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            serde_json::from_str::<LicGenConfig>(&content).unwrap_or_default()
+        } else {
+            LicGenConfig::default()
+        }
+    } else {
+        LicGenConfig::default()
+    };
+
+    if let Ok(token) = std::env::var("GITHUB_GIST_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN")) {
+        if !token.trim().is_empty() {
+            config.github_token = token.trim().to_string();
+        }
+    }
+    if let Ok(gid) = std::env::var("GITHUB_GIST_ID") {
+        if !gid.trim().is_empty() {
+            config.gist_id = gid.trim().to_string();
+        }
+    }
+
+    let env_local = get_repo_root().join(".env.local");
+    if env_local.exists() {
+        if let Ok(content) = fs::read_to_string(&env_local) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') || trimmed.is_empty() {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    let key = k.trim().to_uppercase();
+                    let val = v.trim().trim_matches(&['"', '\''][..]);
+                    if (key == "GITHUB_GIST_TOKEN" || key == "GITHUB_TOKEN") && config.github_token.is_empty() {
+                        config.github_token = val.to_string();
+                    }
+                    if key == "GITHUB_GIST_ID" && config.gist_id.is_empty() {
+                        config.gist_id = val.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    config
+}
+
+fn save_config(config: &LicGenConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let path = get_config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(config)?;
+    fs::write(&path, json.as_bytes())?;
+    Ok(())
+}
+
+fn get_local_history_path() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let next_to_exe = exe_dir.join("history_keys.json");
+            if next_to_exe.exists() {
+                return next_to_exe;
+            }
+        }
+    }
+    let repo_root = get_repo_root();
+    let repo_hist = repo_root.join("history_keys.json");
+    if repo_hist.exists() {
+        return repo_hist;
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            return exe_dir.join("history_keys.json");
+        }
+    }
+    repo_hist
+}
+
+fn load_local_history() -> Vec<KeyHistoryEntry> {
+    let path = get_local_history_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(entries) = serde_json::from_str::<Vec<KeyHistoryEntry>>(&content) {
+                return entries;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_local_history(entries: &[KeyHistoryEntry]) {
+    let path = get_local_history_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(entries) {
+        let _ = fs::write(&path, json.as_bytes());
+    }
+}
+
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+fn fetch_gist_history(token: &str, gist_id: &str) -> Result<Vec<KeyHistoryEntry>, String> {
+    ensure_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!("https://api.github.com/gists/{}", gist_id.trim());
+    let resp = client.get(&url)
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("User-Agent", "PCCare-LicGen")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|e| format!("Lỗi kết nối GitHub API: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("GitHub API trả về mã lỗi {}: {}", status, body));
+    }
+
+    let val: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    if let Some(file_obj) = val.get("files").and_then(|f| f.get("history_keys.json")) {
+        if let Some(content) = file_obj.get("content").and_then(|c| c.as_str()) {
+            let entries: Vec<KeyHistoryEntry> = serde_json::from_str(content)
+                .unwrap_or_default();
+            return Ok(entries);
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+fn save_gist_history(token: &str, gist_id: &str, entries: &[KeyHistoryEntry]) -> Result<(), String> {
+    ensure_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let content = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "description": "PCCareMasterPro Key History (Private)",
+        "files": {
+            "history_keys.json": {
+                "content": content
+            }
+        }
+    });
+
+    let url = format!("https://api.github.com/gists/{}", gist_id.trim());
+    let resp = client.patch(&url)
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("User-Agent", "PCCare-LicGen")
+        .header("Accept", "application/vnd.github+json")
+        .json(&body)
+        .send()
+        .map_err(|e| format!("Lỗi gửi cập nhật Gist: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("GitHub API cập nhật Gist thất bại (mã {}): {}", status, body));
+    }
+
+    Ok(())
+}
+
+fn create_secret_gist(token: &str) -> Result<String, String> {
+    ensure_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "description": "PCCareMasterPro Key History (Private)",
+        "public": false,
+        "files": {
+            "history_keys.json": {
+                "content": "[]"
+            }
+        }
+    });
+
+    let resp = client.post("https://api.github.com/gists")
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("User-Agent", "PCCare-LicGen")
+        .header("Accept", "application/vnd.github+json")
+        .json(&body)
+        .send()
+        .map_err(|e| format!("Lỗi gửi yêu cầu tạo Gist: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        return Err(format!("Không thể tạo Secret Gist (mã {}): {}", status, text));
+    }
+
+    let val: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let id = val.get("id").and_then(|i| i.as_str()).ok_or("Không nhận được Gist ID từ GitHub")?;
+    Ok(id.to_string())
+}
+
+fn record_key_entry(entry: KeyHistoryEntry) {
+    let mut local = load_local_history();
+    if !local.iter().any(|e| e.id.eq_ignore_ascii_case(&entry.id)) {
+        local.push(entry.clone());
+        save_local_history(&local);
+    }
+
+    let config = load_config();
+    if !config.github_token.is_empty() && !config.gist_id.is_empty() {
+        match fetch_gist_history(&config.github_token, &config.gist_id) {
+            Ok(mut remote) => {
+                if !remote.iter().any(|e| e.id.eq_ignore_ascii_case(&entry.id)) {
+                    remote.push(entry);
+                    if let Err(e) = save_gist_history(&config.github_token, &config.gist_id, &remote) {
+                        eprintln!(" [!] Cảnh báo Cloud Sync: {}", e);
+                    } else {
+                        println!(" [CLOUD] Đã tự động đồng bộ lịch sử lên GitHub Secret Gist thành công!");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(" [!] Cảnh báo Cloud Sync: {}", e);
+            }
+        }
+    } else {
+        println!(" [LƯU Ý] Chưa cấu hình Cloud Sync. Dùng lệnh 'licgen setup-cloud --token <TOKEN>' để đồng bộ đám mây.");
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LicensePayload {
     pub product: String,
@@ -281,6 +571,16 @@ fn issue_license(customer: &str, out_path: Option<&str>, license_type: &str, not
     println!("     Ma ban quyen: {}", signed.payload.license_id);
     println!("     Ngay cap:    {}", signed.payload.issued_at);
 
+    let lic_entry = KeyHistoryEntry {
+        id: signed.payload.license_id.clone(),
+        customer: signed.payload.customer.clone(),
+        cdkey: "File .lic".to_string(),
+        issued_at: signed.payload.issued_at.clone(),
+        platform: "PC".to_string(),
+        notes: notes.to_string(),
+    };
+    record_key_entry(lic_entry);
+
     Ok(())
 }
 
@@ -386,8 +686,19 @@ fn generate_cdkey(customer: &str) -> Result<String, Box<dyn std::error::Error>> 
 
     let json_bytes = serde_json::to_vec(&cdkey_data)?;
     let token = BASE64_URL_SAFE_NO_PAD.encode(&json_bytes);
+    let full_cdkey = format!("TPPRO-{}", token);
 
-    Ok(format!("TPPRO-{}", token))
+    let history_entry = KeyHistoryEntry {
+        id: cdkey_data.i.clone(),
+        customer: cdkey_data.c.clone(),
+        cdkey: full_cdkey.clone(),
+        issued_at: cdkey_data.d.clone(),
+        platform: "PC".to_string(),
+        notes: "Kích hoạt bằng CDKey".to_string(),
+    };
+    record_key_entry(history_entry);
+
+    Ok(full_cdkey)
 }
 
 fn run_interactive_mode() -> Result<(), Box<dyn std::error::Error>> {
@@ -526,6 +837,104 @@ fn revoke_license(license_id: &str, customer: &str, reason: &str, auto_push: boo
     Ok(())
 }
 
+fn cmd_setup_cloud(token: &str, gist_id_opt: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("GitHub Token không được để trống! Cú pháp: licgen setup-cloud --token ghp_...".into());
+    }
+
+    println!(" Đang kiểm tra kết nối tới GitHub API...");
+    ensure_crypto_provider();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()?;
+
+    let user_resp = client.get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("User-Agent", "PCCare-LicGen")
+        .header("Accept", "application/vnd.github+json")
+        .send()?;
+
+    if !user_resp.status().is_success() {
+        return Err(format!("Token không hợp lệ hoặc đã hết hạn (Mã lỗi {}). Vui lòng kiểm tra lại Token.", user_resp.status()).into());
+    }
+    let user_data: serde_json::Value = user_resp.json()?;
+    let username = user_data.get("login").and_then(|u| u.as_str()).unwrap_or("User");
+    println!("[OK] Đăng nhập GitHub thành công với tài khoản: {}", username);
+
+    let gist_id = match gist_id_opt {
+        Some(id) if !id.trim().is_empty() => {
+            let id = id.trim().to_string();
+            println!(" Đang kiểm tra Gist ID '{}'...", id);
+            let _ = fetch_gist_history(token, &id)?;
+            println!("[OK] Đã kết nối với Gist thành công!");
+            id
+        }
+        _ => {
+            println!(" Đang tự động tạo Secret Gist mới trên tài khoản '{}'...", username);
+            let id = create_secret_gist(token)?;
+            println!("[OK] Đã tạo Secret Gist mới thành công!");
+            id
+        }
+    };
+
+    let mut config = load_config();
+    config.github_token = token.to_string();
+    config.gist_id = gist_id.clone();
+    save_config(&config)?;
+
+    println!("\n========================================================================");
+    println!(" [THÀNH CÔNG] ĐÃ CẤU HÌNH CLOUD SYNC CHO LICGEN!");
+    println!(" Tài khoản:  {}", username);
+    println!(" Gist ID:    {}", gist_id);
+    println!(" Gist URL:   https://gist.github.com/{}/{}", username, gist_id);
+    println!(" Cấu hình:   {}", get_config_path().display());
+    println!(" (Gợi ý: Sao chép Gist ID trên để dán vào cài đặt trên App Android!)");
+    println!("========================================================================");
+
+    Ok(())
+}
+
+fn cmd_list_keys() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let config = load_config();
+
+    let (entries, source) = if !config.github_token.is_empty() && !config.gist_id.is_empty() {
+        print!(" Đang tải danh sách từ GitHub Secret Gist... ");
+        let _ = std::io::stdout().flush();
+        match fetch_gist_history(&config.github_token, &config.gist_id) {
+            Ok(rem) => {
+                println!("[OK]");
+                (rem, "GitHub Cloud Secret Gist")
+            }
+            Err(e) => {
+                println!("[!] Lỗi tải Cloud ({}), chuyển sang đọc file cục bộ.", e);
+                (load_local_history(), "Cục bộ (history_keys.json)")
+            }
+        }
+    } else {
+        (load_local_history(), "Cục bộ (history_keys.json)")
+    };
+
+    println!("\n===============================================================================================");
+    println!("                  DANH SÁCH BẢN QUYỀN ĐÃ CẤP (Nguồn: {})", source);
+    println!("===============================================================================================");
+    if entries.is_empty() {
+        println!(" (Chưa có mã bản quyền nào được ghi nhận).");
+        return Ok(());
+    }
+
+    println!("{:<4} | {:<15} | {:<25} | {:<22} | {:<10}", "STT", "Mã License ID", "Khách hàng", "Thời gian cấp", "Nền tảng");
+    println!("{:-<4}-+-{:-<15}-+-{:-<25}-+-{:-<22}-+-{:-<10}", "", "", "", "", "");
+    for (i, e) in entries.iter().enumerate() {
+        println!("{:<4} | {:<15} | {:<25} | {:<22} | {:<10}", i + 1, e.id, e.customer, e.issued_at, e.platform);
+    }
+    println!("{:-<4}-+-{:-<15}-+-{:-<25}-+-{:-<22}-+-{:-<10}", "", "", "", "", "");
+    println!(" Tổng cộng: {} key đã tạo.\n", entries.len());
+
+    Ok(())
+}
+
 fn print_usage() {
     println!("=== PCCareMasterPro License Generator (Internal Tool) ===");
     println!("Cách dùng:");
@@ -536,6 +945,12 @@ fn print_usage() {
     println!();
     println!("  licgen issue --customer \"<Tên Khách Hàng>\" [--out <path.lic>]");
     println!("      Xuất file license .lic truyền thống.");
+    println!();
+    println!("  licgen list");
+    println!("      Xem danh sách các mã CDKey đã cấp (từ GitHub Gist hoặc file cục bộ).");
+    println!();
+    println!("  licgen setup-cloud --token \"<ghp_...>\" [--gist \"<gist_id>\"]");
+    println!("      Kết nối GitHub Secret Gist để tự động đồng bộ lịch sử tạo key.");
     println!();
     println!("  licgen revoke --id <TP-LIC-XXXXXX> --customer \"<Tên>\" [--reason \"Lý do\"] [--push]");
     println!("      Thu hồi một mã bản quyền, ký số danh sách, và tùy chọn push lên GitHub.");
@@ -697,6 +1112,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             revoke_license(&license_id, &customer, &reason, auto_push)?;
+        }
+        "list" => {
+            cmd_list_keys()?;
+        }
+        "setup-cloud" => {
+            let mut token = String::new();
+            let mut gist_id = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--token" | "-t" => {
+                        if i + 1 < args.len() {
+                            token = args[i + 1].trim_matches(&['"', '\''][..]).to_string();
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "--gist" | "-g" => {
+                        if i + 1 < args.len() {
+                            let g = args[i + 1].trim_matches(&['"', '\''][..]).to_string();
+                            gist_id = Some(g);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            if token.trim().is_empty() {
+                eprintln!("[ERROR] Thiếu GitHub Token. Cú pháp: licgen setup-cloud --token <ghp_...> [--gist <id>]");
+                std::process::exit(1);
+            }
+
+            cmd_setup_cloud(&token, gist_id.as_deref())?;
         }
         _ => {
             print_usage();
