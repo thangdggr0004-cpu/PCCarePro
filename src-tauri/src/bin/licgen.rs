@@ -701,56 +701,212 @@ fn generate_cdkey(customer: &str) -> Result<String, Box<dyn std::error::Error>> 
     Ok(full_cdkey)
 }
 
+fn interactive_create_cdkey() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    print!("\n Nhập Tên Khách Hàng (hoặc Tên Đơn Vị): ");
+    std::io::stdout().flush()?;
+    let mut customer = String::new();
+    std::io::stdin().read_line(&mut customer)?;
+    let customer = customer.trim();
+    if customer.is_empty() {
+        println!(" [!] Tên khách hàng không được để trống!");
+        return Ok(());
+    }
+
+    let cdkey = match generate_cdkey(customer) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("\n[LỖI] Không thể tạo CDKey: {}", e);
+            pause();
+            return Ok(());
+        }
+    };
+
+    println!();
+    println!("------------------------------------------------------------------------");
+    println!(" MÃ CDKEY KÍCH HOẠT CHO KHÁCH HÀNG: [{}]", customer);
+    println!();
+    println!(" {}", cdkey);
+    println!();
+    println!("------------------------------------------------------------------------");
+
+    copy_to_clipboard(&cdkey);
+    println!(" => [THÀNH CÔNG] ĐÃ TỰ ĐỘNG COPY MÃ CDKEY VÀO CLIPBOARD CỦA BẠN!");
+    println!("    Bạn chỉ cần mở Zalo / Tin nhắn và bấm Ctrl + V để gửi cho khách.");
+    pause();
+    Ok(())
+}
+
+fn interactive_manage_and_revoke() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let config = load_config();
+    let (entries, source) = if !config.github_token.is_empty() && !config.gist_id.is_empty() {
+        print!("\n Đang tải danh sách từ GitHub Secret Gist... ");
+        let _ = std::io::stdout().flush();
+        match fetch_gist_history(&config.github_token, &config.gist_id) {
+            Ok(rem) => {
+                println!("[OK]");
+                (rem, "GitHub Cloud Secret Gist")
+            }
+            Err(e) => {
+                println!("[!] Lỗi tải Cloud ({}), đọc file cục bộ.", e);
+                (load_local_history(), "Cục bộ (history_keys.json)")
+            }
+        }
+    } else {
+        (load_local_history(), "Cục bộ (history_keys.json)")
+    };
+
+    if entries.is_empty() {
+        println!("\n (Chưa có mã bản quyền nào được ghi nhận).");
+        pause();
+        return Ok(());
+    }
+
+    let rev_list = load_or_create_revocation_list();
+
+    println!("\n=================================================================================================");
+    println!("                     DANH SÁCH KHÁCH HÀNG ĐÃ CẤP KEY (Nguồn: {})", source);
+    println!("=================================================================================================");
+    println!("{:<4} | {:<15} | {:<25} | {:<20} | {:<14}", "STT", "Mã License ID", "Khách hàng", "Ngày cấp", "Trạng thái");
+    println!("{:-<4}-+-{:-<15}-+-{:-<25}-+-{:-<20}-+-{:-<14}", "", "", "", "", "");
+
+    for (i, e) in entries.iter().enumerate() {
+        let is_rev = rev_list.revoked.iter().any(|r| r.id.eq_ignore_ascii_case(&e.id));
+        let status = if is_rev {
+            "[ĐÃ THU HỒI] ❌"
+        } else {
+            "[Hoạt động]  ✅"
+        };
+        println!("{:<4} | {:<15} | {:<25} | {:<20} | {:<14}", i + 1, e.id, e.customer, e.issued_at, status);
+    }
+    println!("{:-<4}-+-{:-<15}-+-{:-<25}-+-{:-<20}-+-{:-<14}", "", "", "", "", "");
+
+    print!("\n Nhập STT khách hàng bạn muốn THU HỒI (hoặc bấm Enter để quay lại): ");
+    std::io::stdout().flush()?;
+    let mut num_str = String::new();
+    std::io::stdin().read_line(&mut num_str)?;
+    let num_str = num_str.trim();
+    if num_str.is_empty() {
+        return Ok(());
+    }
+
+    let idx: usize = match num_str.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= entries.len() => n - 1,
+        _ => {
+            println!(" [!] Số thứ tự không hợp lệ!");
+            pause();
+            return Ok(());
+        }
+    };
+
+    let target = &entries[idx];
+    if rev_list.revoked.iter().any(|r| r.id.eq_ignore_ascii_case(&target.id)) {
+        println!(" [!] Mã {} ({}) đã bị thu hồi từ trước rồi!", target.id, target.customer);
+        pause();
+        return Ok(());
+    }
+
+    println!("\n -------------------------------------------------------------");
+    println!(" BẠN ĐANG CHỌN THU HỒI BẢN QUYỀN CỦA:");
+    println!("   Khách hàng:      {}", target.customer);
+    println!("   Mã License ID:   {}", target.id);
+    println!(" -------------------------------------------------------------");
+    print!(" Nhập lý do thu hồi [Hủy dịch vụ / Hoàn tiền]: ");
+    std::io::stdout().flush()?;
+    let mut reason = String::new();
+    std::io::stdin().read_line(&mut reason)?;
+    let reason = reason.trim();
+    let final_reason = if reason.is_empty() { "Hủy dịch vụ / Hoàn tiền" } else { reason };
+
+    print!(" Xác nhận thu hồi và đẩy lên GitHub ngay? (y/n) [y]: ");
+    std::io::stdout().flush()?;
+    let mut confirm = String::new();
+    std::io::stdin().read_line(&mut confirm)?;
+    let confirm = confirm.trim();
+    if !confirm.is_empty() && !confirm.eq_ignore_ascii_case("y") {
+        println!(" Đã hủy thao tác thu hồi.");
+        pause();
+        return Ok(());
+    }
+
+    revoke_license(&target.id, &target.customer, final_reason, true)?;
+    pause();
+    Ok(())
+}
+
+fn interactive_setup_cloud() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let config = load_config();
+    println!("\n============================================================");
+    println!("               CẤU HÌNH ĐỒNG BỘ ĐÁM MÂY GITHUB              ");
+    println!("============================================================");
+    if !config.github_token.is_empty() {
+        let masked: String = config.github_token.chars().rev().take(6).collect::<String>().chars().rev().collect();
+        println!(" Token hiện tại: ...{}", masked);
+        println!(" Gist ID:        {}", if config.gist_id.is_empty() { "(Chưa có)" } else { &config.gist_id });
+    } else {
+        println!(" (Chưa cấu hình Token)");
+    }
+    println!("------------------------------------------------------------");
+    print!(" Nhập GitHub Personal Access Token (hoặc Enter để giữ nguyên): ");
+    std::io::stdout().flush()?;
+    let mut token = String::new();
+    std::io::stdin().read_line(&mut token)?;
+    let token = token.trim();
+    if token.is_empty() && config.github_token.is_empty() {
+        println!(" [!] Bạn chưa nhập Token.");
+        pause();
+        return Ok(());
+    }
+    let final_token = if token.is_empty() { config.github_token.as_str() } else { token };
+
+    print!(" Nhập Gist ID (hoặc Enter để tự động tạo mới): ");
+    std::io::stdout().flush()?;
+    let mut gist_id = String::new();
+    std::io::stdin().read_line(&mut gist_id)?;
+    let gist_id = gist_id.trim();
+    let final_gist = if gist_id.is_empty() { None } else { Some(gist_id) };
+
+    cmd_setup_cloud(final_token, final_gist)?;
+    pause();
+    Ok(())
+}
+
 fn run_interactive_mode() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
     loop {
         println!("========================================================================");
-        println!("     PCCARE MASTER PRO - CÔNG CỤ TẠO MÃ CDKEY BẢN QUYỀN (OFFLINE)      ");
+        println!("     PCCARE MASTER PRO - TRUNG TÂM PHÁT HÀNH & QUẢN LÝ BẢN QUYỀN       ");
         println!("========================================================================");
-        println!();
-        print!(" Nhập Tên Khách Hàng (hoặc Tên Công Ty): ");
+        println!(" [1] Tạo mã CDKey mới cho khách hàng");
+        println!(" [2] Xem danh sách khách & Chọn số để THU HỒI ngay (1-Click)");
+        println!(" [3] Cấu hình Đám mây (GitHub Secret Gist & Token)");
+        println!(" [0] Thoát");
+        println!("------------------------------------------------------------------------");
+        print!(" Lựa chọn của bạn [1]: ");
         std::io::stdout().flush()?;
-        let mut customer = String::new();
-        std::io::stdin().read_line(&mut customer)?;
-        let customer = customer.trim();
-        if customer.is_empty() {
-            println!(" [!] Tên khách hàng không được để trống!");
-            pause();
-            return Ok(());
-        }
+        let mut choice = String::new();
+        std::io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim();
 
-        let cdkey = match generate_cdkey(customer) {
-            Ok(k) => k,
-            Err(e) => {
-                eprintln!("\n[LỖI] Không thể tạo CDKey: {}", e);
-                pause();
-                return Ok(());
+        match choice {
+            "2" => {
+                interactive_manage_and_revoke()?;
             }
-        };
-
-        println!();
-        println!("------------------------------------------------------------------------");
-        println!(" MÃ CDKEY KÍCH HOẠT CHO KHÁCH HÀNG: [{}]", customer);
-        println!();
-        println!(" {}", cdkey);
-        println!();
-        println!("------------------------------------------------------------------------");
-
-        copy_to_clipboard(&cdkey);
-        println!(" => [THÀNH CÔNG] ĐÃ TỰ ĐỘNG COPY MÃ CDKEY VÀO CLIPBOARD CỦA BẠN!");
-        println!("    Bạn chỉ cần mở Zalo / Tin nhắn và bấm Ctrl + V để gửi cho khách.");
-        println!();
-
-        print!(" Bạn có muốn tạo tiếp mã CDKey cho khách khác? (y/n) [n]: ");
-        std::io::stdout().flush()?;
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        if !answer.trim().eq_ignore_ascii_case("y") {
-            break;
+            "3" => {
+                interactive_setup_cloud()?;
+            }
+            "0" | "q" | "exit" => {
+                println!("Tạm biệt!");
+                break;
+            }
+            _ => {
+                interactive_create_cdkey()?;
+            }
         }
-        println!("\n");
+        println!();
     }
-    pause();
     Ok(())
 }
 

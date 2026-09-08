@@ -280,6 +280,32 @@
       font-weight: 600;
       cursor: pointer;
       white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .btn-revoke {
+      background: rgba(239, 68, 68, 0.12) !important;
+      border: 1px solid rgba(239, 68, 68, 0.35) !important;
+      color: #f87171 !important;
+    }
+    .btn-revoke:active {
+      background: rgba(239, 68, 68, 0.25) !important;
+    }
+    .badge-revoked {
+      font-size: 10px;
+      font-weight: 700;
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .item-revoked {
+      opacity: 0.75;
+      border-color: rgba(239, 68, 68, 0.35) !important;
+      background: #140b0f !important;
     }
     .history-empty {
       text-align: center;
@@ -517,6 +543,34 @@
     </div>
   </div>
 
+  <!-- Modal Thu Hồi Bản Quyền -->
+  <div id="revokeModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="color:#ef4444;">🚫 Thu Hồi Bản Quyền</h3>
+        <button id="btnCloseRevokeModal" class="btn-close">&times;</button>
+      </div>
+      <p style="font-size:13px; color:#cbd5e1; margin-bottom:8px;">
+        Khách hàng: <strong id="revokeCustomerName" style="color:#f8fafc;"></strong>
+      </p>
+      <div style="font-size:12px; color:#94a3b8; margin-bottom:12px;">
+        Mã bản quyền: <code id="revokeLicenseId" style="color:#38bdf8; font-weight:700;"></code>
+      </div>
+      <div class="form-group">
+        <label for="revokeReason">Lý do thu hồi:</label>
+        <input type="text" id="revokeReason" value="Hủy dịch vụ / Hoàn tiền">
+      </div>
+      <p style="font-size:11px; color:#94a3b8; margin-bottom:14px; line-height:1.4;">
+        Hệ thống sẽ dùng chữ ký số Ed25519 để ký danh sách đen và cập nhật lên GitHub. Khi máy khách hàng mở app (có mạng) sẽ tự động bị xóa bản quyền.
+      </p>
+      <div id="revokeMsg" style="font-size:12px; margin-bottom:12px; min-height:16px;"></div>
+      <div style="display:flex; gap:8px;">
+        <button id="btnCancelRevoke" class="btn-secondary" style="flex:1;">Hủy</button>
+        <button id="btnConfirmRevoke" class="btn-primary" style="flex:1; background:linear-gradient(135deg, #dc2626, #ef4444);">Xác Nhận Thu Hồi</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast">Đã sao chép!</div>
 
   <script>
@@ -647,12 +701,18 @@
         return;
       }
       historyList.innerHTML = list.map((item, idx) => `
-        <div class="history-item">
+        <div class="history-item ${item.isRevoked ? 'item-revoked' : ''}">
           <div class="history-info">
-            <div class="history-name">${escapeHtml(item.customer)}</div>
+            <div class="history-name">
+              ${escapeHtml(item.customer)}
+              ${item.isRevoked ? '<span class="badge-revoked">ĐÃ THU HỒI</span>' : ''}
+            </div>
             <div class="history-meta">${escapeHtml(item.licenseId)} &bull; ${formatDate(item.issuedAt)}</div>
           </div>
-          <button class="history-btn" onclick="copyHistoryIndex(${idx})">Sao chép</button>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <button class="history-btn" onclick="copyHistoryIndex(${idx})">Sao chép</button>
+            ${!item.isRevoked ? `<button class="history-btn btn-revoke" onclick="openRevokeModal(${idx})">Thu hồi</button>` : ''}
+          </div>
         </div>
       `).join('');
     }
@@ -1044,6 +1104,159 @@
         showToast('Đã tải ' + mapped.length + ' key từ GitHub Cloud!');
       } catch (err) {
         showToast('Lỗi tải Cloud: ' + err.message);
+      }
+    });
+
+    // ── 1-Click Revocation Logic (Ed25519 Signed & GitHub Sync) ───────────────
+    function canonicalRevocationBytes(version, updatedAt, ids) {
+      const sortedIds = [...ids].sort().join(',');
+      const canonical = `version=${version}&updated_at=${updatedAt}&revoked_count=${ids.length}&ids=${sortedIds}`;
+      return new TextEncoder().encode(canonical);
+    }
+
+    let selectedRevokeIdx = null;
+    const revokeModal = document.getElementById('revokeModal');
+    const btnCloseRevokeModal = document.getElementById('btnCloseRevokeModal');
+    const btnCancelRevoke = document.getElementById('btnCancelRevoke');
+    const btnConfirmRevoke = document.getElementById('btnConfirmRevoke');
+    const revokeCustomerName = document.getElementById('revokeCustomerName');
+    const revokeLicenseId = document.getElementById('revokeLicenseId');
+    const revokeReason = document.getElementById('revokeReason');
+    const revokeMsg = document.getElementById('revokeMsg');
+
+    window.openRevokeModal = function(idx) {
+      const raw = localStorage.getItem('licgen_history');
+      const list = raw ? JSON.parse(raw) : [];
+      const item = list[idx];
+      if (!item) return;
+
+      selectedRevokeIdx = idx;
+      revokeCustomerName.textContent = item.customer;
+      revokeLicenseId.textContent = item.licenseId;
+      revokeReason.value = 'Hủy dịch vụ / Hoàn tiền';
+      revokeMsg.textContent = '';
+      revokeModal.style.display = 'flex';
+    };
+
+    btnCloseRevokeModal.addEventListener('click', () => {
+      revokeModal.style.display = 'none';
+    });
+    btnCancelRevoke.addEventListener('click', () => {
+      revokeModal.style.display = 'none';
+    });
+    revokeModal.addEventListener('click', (e) => {
+      if (e.target === revokeModal) revokeModal.style.display = 'none';
+    });
+
+    btnConfirmRevoke.addEventListener('click', async () => {
+      if (selectedRevokeIdx === null) return;
+      const raw = localStorage.getItem('licgen_history');
+      const list = raw ? JSON.parse(raw) : [];
+      const item = list[selectedRevokeIdx];
+      if (!item) return;
+
+      const reason = (revokeReason.value || 'Hủy dịch vụ / Hoàn tiền').trim();
+      const cfg = getCloudConfig();
+
+      revokeMsg.style.color = '#38bdf8';
+      revokeMsg.textContent = 'Đang ký số Ed25519 & gửi lên GitHub...';
+      btnConfirmRevoke.disabled = true;
+
+      try {
+        let curList = { version: 1, updated_at: getUtcTimestamp(), revoked: [], signature: '' };
+        let sha = null;
+
+        if (cfg.token) {
+          try {
+            const rRes = await fetch('https://api.github.com/repos/thangdggr0004-cpu/PCCarePro/contents/revocation/revoked.json', {
+              headers: {
+                'Authorization': 'Bearer ' + cfg.token,
+                'Accept': 'application/vnd.github+json'
+              }
+            });
+            if (rRes.ok) {
+              const rData = await rRes.json();
+              sha = rData.sha;
+              const decoded = decodeURIComponent(escape(atob(rData.content.replace(/\s/g, ''))));
+              curList = JSON.parse(decoded);
+            }
+          } catch (e) {
+            console.warn('Cannot fetch from repo contents:', e);
+          }
+        }
+
+        if (!sha) {
+          try {
+            const rawRes = await fetch('https://raw.githubusercontent.com/thangdggr0004-cpu/PCCarePro/master/revocation/revoked.json');
+            if (rawRes.ok) {
+              curList = await rawRes.json();
+            }
+          } catch (e) {}
+        }
+
+        const upperId = item.licenseId.trim().toUpperCase();
+        if (!curList.revoked.some(r => (r.id || '').toUpperCase() === upperId)) {
+          curList.revoked.push({
+            id: upperId,
+            customer: item.customer,
+            revoked_at: getUtcTimestamp(),
+            reason: reason
+          });
+        }
+        curList.updated_at = getUtcTimestamp();
+
+        // Sign with embedded Ed25519 key
+        const ids = curList.revoked.map(r => r.id);
+        const msgBytes = canonicalRevocationBytes(curList.version, curList.updated_at, ids);
+        const sigBytes = nacl.sign.detached(msgBytes, keyPair.secretKey);
+        curList.signature = bytesToBase64(sigBytes);
+
+        const newJsonStr = JSON.stringify(curList, null, 2);
+
+        // Update on GitHub if Token available
+        let pushed = false;
+        if (cfg.token && sha) {
+          const putRes = await fetch('https://api.github.com/repos/thangdggr0004-cpu/PCCarePro/contents/revocation/revoked.json', {
+            method: 'PUT',
+            headers: {
+              'Authorization': 'Bearer ' + cfg.token,
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              message: `revoke: thu hồi ${upperId} (${item.customer})`,
+              content: btoa(unescape(encodeURIComponent(newJsonStr))),
+              sha: sha,
+              branch: 'master'
+            })
+          });
+
+          if (putRes.ok) {
+            pushed = true;
+          } else {
+            const errText = await putRes.text();
+            console.warn('GitHub update error:', errText);
+          }
+        }
+
+        // Update local history
+        item.isRevoked = true;
+        item.revokeReason = reason;
+        localStorage.setItem('licgen_history', JSON.stringify(list));
+        renderHistory(list);
+
+        revokeModal.style.display = 'none';
+        if (pushed) {
+          showToast('🚫 Đã thu hồi & cập nhật lên GitHub thành công!');
+        } else {
+          showToast('🚫 Đã ký số thu hồi cục bộ!');
+        }
+      } catch (err) {
+        console.error('Revoke error:', err);
+        revokeMsg.style.color = '#ef4444';
+        revokeMsg.textContent = 'Lỗi: ' + err.message;
+      } finally {
+        btnConfirmRevoke.disabled = false;
       }
     });
 
