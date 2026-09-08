@@ -21,3 +21,4 @@ updater*
 .env
 .env.*
 !.env.example
+licgen_config.json
