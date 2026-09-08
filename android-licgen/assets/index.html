@@ -678,7 +678,16 @@
       try {
         const raw = localStorage.getItem('licgen_history');
         const list = raw ? JSON.parse(raw) : [];
-        renderHistory(list);
+        if (list.length > 0) {
+          renderHistory(list);
+        } else {
+          const cfg = getCloudConfig();
+          if (cfg.token && cfg.gistId) {
+            historyList.innerHTML = '<div class="history-empty" style="color:#38bdf8;">⏳ Đang tự động kết nối và tải danh sách từ Cloud...</div>';
+          } else {
+            renderHistory([]);
+          }
+        }
       } catch (e) {
         renderHistory([]);
       }
@@ -847,10 +856,15 @@
     const cloudPill = document.getElementById('cloudPill');
     const btnSyncCloud = document.getElementById('btnSyncCloud');
 
+    const DEFAULT_GH_TOKEN = "";
+    const DEFAULT_GIST_ID = "0fe19636881ef423e2ff2e1f9904cee8";
+
     function getCloudConfig() {
+      const savedToken = (localStorage.getItem('licgen_gh_token') || '').trim();
+      const savedGist = (localStorage.getItem('licgen_gist_id') || '').trim();
       return {
-        token: (localStorage.getItem('licgen_gh_token') || '').trim(),
-        gistId: (localStorage.getItem('licgen_gist_id') || '').trim()
+        token: savedToken || DEFAULT_GH_TOKEN,
+        gistId: savedGist || DEFAULT_GIST_ID
       };
     }
 
@@ -1072,15 +1086,38 @@
       } catch (e) {}
     }
 
-    btnSyncCloud.addEventListener('click', async () => {
+    async function syncFromCloud(showToastMsg = false) {
       const cfg = getCloudConfig();
       if (!cfg.token || !cfg.gistId) {
-        showToast('Vui lòng mở ⚙️ Cloud để cấu hình trước!');
-        btnOpenSettings.click();
+        if (showToastMsg) {
+          showToast('Vui lòng mở ⚙️ Cloud để cấu hình trước!');
+          btnOpenSettings.click();
+        }
         return;
       }
-      showToast('Đang tải danh sách từ GitHub Cloud...');
+
+      if (showToastMsg) {
+        showToast('Đang tải danh sách từ GitHub Cloud...');
+      }
+
       try {
+        // 1. Fetch revoked list in parallel to know revocation status
+        let revokedSet = new Set();
+        try {
+          const revRes = await fetch('https://raw.githubusercontent.com/thangdggr0004-cpu/PCCarePro/master/revocation/revoked.json?t=' + Date.now());
+          if (revRes.ok) {
+            const revData = await revRes.json();
+            if (Array.isArray(revData.revoked)) {
+              revData.revoked.forEach(r => {
+                if (r.id) revokedSet.add(r.id.toUpperCase());
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('Cannot fetch revoked list:', e);
+        }
+
+        // 2. Fetch Gist history
         const gRes = await fetch('https://api.github.com/gists/' + cfg.gistId, {
           headers: {
             'Authorization': 'Bearer ' + cfg.token,
@@ -1093,19 +1130,33 @@
         if (gData.files && gData.files['history_keys.json'] && gData.files['history_keys.json'].content) {
           entries = JSON.parse(gData.files['history_keys.json'].content);
         }
-        const mapped = entries.map(e => ({
-          licenseId: e.id,
-          customer: e.customer,
-          cdkey: e.cdkey,
-          issuedAt: e.issued_at
-        })).reverse();
+
+        const mapped = entries.map(e => {
+          const upperId = (e.id || '').toUpperCase();
+          return {
+            licenseId: e.id,
+            customer: e.customer,
+            cdkey: e.cdkey,
+            issuedAt: e.issued_at,
+            isRevoked: revokedSet.has(upperId)
+          };
+        }).reverse();
+
         localStorage.setItem('licgen_history', JSON.stringify(mapped));
         renderHistory(mapped);
-        showToast('Đã tải ' + mapped.length + ' key từ GitHub Cloud!');
+        if (showToastMsg) {
+          showToast('Đã tải ' + mapped.length + ' key từ GitHub Cloud!');
+        }
       } catch (err) {
-        showToast('Lỗi tải Cloud: ' + err.message);
+        console.error('Lỗi tải Cloud:', err);
+        if (showToastMsg) {
+          showToast('Lỗi tải Cloud: ' + err.message);
+        }
+        loadHistory();
       }
-    });
+    }
+
+    btnSyncCloud.addEventListener('click', () => syncFromCloud(true));
 
     // ── 1-Click Revocation Logic (Ed25519 Signed & GitHub Sync) ───────────────
     function canonicalRevocationBytes(version, updatedAt, ids) {
@@ -1263,6 +1314,7 @@
     loadHistory();
     updateCloudPill();
     syncPendingKeys();
+    syncFromCloud(false);
   </script>
 </body>
 </html>
