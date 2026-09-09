@@ -5,19 +5,85 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0f172a">
   <title>PCCare LicGen - Thiên Phát Tech</title>
+  <script>
+    (function() {
+      try {
+        var t = localStorage.getItem('licgen_theme');
+        if (t === 'light') {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      } catch (e) {}
+    })();
+  </script>
   <style>
     :root {
       --bg: #0b0f19;
       --card-bg: #131b2e;
       --card-border: #1e293b;
+      --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
       --accent: #0ea5e9;
       --accent-glow: rgba(14, 165, 233, 0.35);
       --success: #10b981;
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
+      --label-color: #cbd5e1;
       --input-bg: #090d16;
       --input-border: #26334d;
+      --input-text: #ffffff;
+      --box-bg: #090d16;
+      --box-border: #0284c7;
+      --cdkey-bg: #040711;
+      --cdkey-text: #f1f5f9;
+      --cdkey-border: #334155;
+      --btn-sec-bg: #1e293b;
+      --btn-sec-border: #334155;
+      --btn-sec-text: #38bdf8;
+      --btn-sec-hover: #334155;
+      --item-bg: #090d16;
+      --item-border: #1e293b;
+      --item-name: #e2e8f0;
+      --modal-backdrop: rgba(0, 0, 0, 0.75);
+      --modal-title: #f8fafc;
+      --pill-bg: rgba(14, 165, 233, 0.12);
+      --pill-border: rgba(14, 165, 233, 0.25);
+      --pill-text: #38bdf8;
+      --revoked-bg: #140b0f;
     }
+
+    [data-theme="light"] {
+      --bg: #f1f5f9;
+      --card-bg: #ffffff;
+      --card-border: #e2e8f0;
+      --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.07);
+      --accent: #0284c7;
+      --accent-glow: rgba(2, 132, 199, 0.22);
+      --success: #059669;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --label-color: #334155;
+      --input-bg: #f8fafc;
+      --input-border: #cbd5e1;
+      --input-text: #0f172a;
+      --box-bg: #f8fafc;
+      --box-border: #0284c7;
+      --cdkey-bg: #ffffff;
+      --cdkey-text: #0f172a;
+      --cdkey-border: #cbd5e1;
+      --btn-sec-bg: #f1f5f9;
+      --btn-sec-border: #cbd5e1;
+      --btn-sec-text: #0284c7;
+      --btn-sec-hover: #e2e8f0;
+      --item-bg: #f8fafc;
+      --item-border: #e2e8f0;
+      --item-name: #0f172a;
+      --modal-backdrop: rgba(15, 23, 42, 0.55);
+      --modal-title: #0f172a;
+      --pill-bg: rgba(2, 132, 199, 0.08);
+      --pill-border: rgba(2, 132, 199, 0.2);
+      --pill-text: #0284c7;
+      --revoked-bg: #fef2f2;
+    }
+
     * {
       box-sizing: border-box;
       margin: 0;
@@ -33,6 +99,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
+      transition: background-color 0.25s ease, color 0.25s ease;
     }
     .container {
       width: 100%;
@@ -83,14 +150,15 @@
       border: 1px solid var(--card-border);
       border-radius: 16px;
       padding: 18px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      box-shadow: var(--card-shadow);
+      transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
     }
     .card-title {
       font-size: 14px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      color: #94a3b8;
+      color: var(--text-muted);
       margin-bottom: 14px;
       display: flex;
       align-items: center;
@@ -103,7 +171,7 @@
       display: block;
       font-size: 13px;
       font-weight: 600;
-      color: #cbd5e1;
+      color: var(--label-color);
       margin-bottom: 6px;
     }
     input[type="text"] {
@@ -112,7 +180,7 @@
       background: var(--input-bg);
       border: 1px solid var(--input-border);
       border-radius: 12px;
-      color: #fff;
+      color: var(--input-text);
       font-size: 15px;
       outline: none;
       transition: all 0.2s;
@@ -145,8 +213,8 @@
     .result-box {
       margin-top: 16px;
       padding: 14px;
-      background: #090d16;
-      border: 1px solid #0284c7;
+      background: var(--box-bg);
+      border: 1px solid var(--box-border);
       border-radius: 12px;
       animation: fadeIn 0.3s ease;
     }
@@ -163,7 +231,7 @@
     .result-label {
       font-size: 12px;
       font-weight: 700;
-      color: #38bdf8;
+      color: var(--accent);
       text-transform: uppercase;
     }
     .result-badge {
@@ -177,13 +245,13 @@
     .cdkey-text {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 13px;
-      color: #f1f5f9;
-      background: #040711;
+      color: var(--cdkey-text);
+      background: var(--cdkey-bg);
       padding: 10px;
       border-radius: 8px;
       word-break: break-all;
       user-select: all;
-      border: 1px dashed #334155;
+      border: 1px dashed var(--cdkey-border);
       line-height: 1.4;
     }
     .action-row {
@@ -206,12 +274,12 @@
       transition: all 0.2s;
     }
     .btn-copy {
-      background: #1e293b;
-      color: #38bdf8;
-      border: 1px solid #334155;
+      background: var(--btn-sec-bg);
+      color: var(--btn-sec-text);
+      border: 1px solid var(--btn-sec-border);
     }
     .btn-copy:active {
-      background: #334155;
+      background: var(--btn-sec-hover);
     }
     .btn-share {
       background: #059669;
@@ -232,7 +300,7 @@
     .btn-clear {
       background: none;
       border: none;
-      color: #64748b;
+      color: var(--text-muted);
       font-size: 12px;
       cursor: pointer;
     }
@@ -244,14 +312,15 @@
       overflow-y: auto;
     }
     .history-item {
-      background: #090d16;
-      border: 1px solid #1e293b;
+      background: var(--item-bg);
+      border: 1px solid var(--item-border);
       border-radius: 10px;
       padding: 10px 12px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 8px;
+      transition: background 0.2s ease, border-color 0.2s ease;
     }
     .history-info {
       flex: 1;
@@ -260,22 +329,22 @@
     .history-name {
       font-size: 14px;
       font-weight: 600;
-      color: #e2e8f0;
+      color: var(--item-name);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .history-meta {
       font-size: 11px;
-      color: #64748b;
+      color: var(--text-muted);
       margin-top: 2px;
     }
     .history-btn {
       padding: 6px 12px;
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--btn-sec-bg);
+      border: 1px solid var(--btn-sec-border);
       border-radius: 6px;
-      color: #38bdf8;
+      color: var(--btn-sec-text);
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
@@ -303,13 +372,13 @@
       vertical-align: middle;
     }
     .item-revoked {
-      opacity: 0.75;
+      opacity: 0.85;
       border-color: rgba(239, 68, 68, 0.35) !important;
-      background: #140b0f !important;
+      background: var(--revoked-bg) !important;
     }
     .history-empty {
       text-align: center;
-      color: #64748b;
+      color: var(--text-muted);
       font-size: 13px;
       padding: 20px 0;
     }
@@ -324,7 +393,7 @@
       border-radius: 999px;
       font-size: 14px;
       font-weight: 600;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
       transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
       z-index: 9999;
       pointer-events: none;
@@ -334,10 +403,10 @@
     }
     .btn-icon {
       padding: 6px 12px;
-      background: rgba(14, 165, 233, 0.12);
-      border: 1px solid rgba(14, 165, 233, 0.25);
+      background: var(--pill-bg);
+      border: 1px solid var(--pill-border);
       border-radius: 999px;
-      color: #38bdf8;
+      color: var(--pill-text);
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
@@ -347,7 +416,7 @@
       transition: all 0.2s;
     }
     .btn-icon:active {
-      background: rgba(14, 165, 233, 0.25);
+      filter: brightness(0.9);
     }
     .cloud-pill {
       display: inline-flex;
@@ -360,12 +429,12 @@
     }
     .cloud-pill.connected {
       background: rgba(16, 185, 129, 0.15);
-      color: #34d399;
+      color: #10b981;
       border: 1px solid rgba(16, 185, 129, 0.3);
     }
     .cloud-pill.disconnected {
       background: rgba(148, 163, 184, 0.15);
-      color: #94a3b8;
+      color: var(--text-muted);
       border: 1px solid rgba(148, 163, 184, 0.3);
     }
     .modal {
@@ -374,7 +443,7 @@
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(0, 0, 0, 0.75);
+      background: var(--modal-backdrop);
       backdrop-filter: blur(4px);
       display: flex;
       justify-content: center;
@@ -390,7 +459,7 @@
       padding: 20px;
       width: 100%;
       max-width: 420px;
-      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
     }
     .modal-header {
       display: flex;
@@ -401,29 +470,29 @@
     .modal-header h3 {
       font-size: 16px;
       font-weight: 700;
-      color: #f8fafc;
+      color: var(--modal-title);
     }
     .btn-close {
       background: none;
       border: none;
-      color: #94a3b8;
+      color: var(--text-muted);
       font-size: 24px;
       cursor: pointer;
       line-height: 1;
     }
     .btn-secondary {
       padding: 10px;
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--btn-sec-bg);
+      border: 1px solid var(--btn-sec-border);
       border-radius: 10px;
-      color: #cbd5e1;
+      color: var(--label-color);
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
     }
     .btn-secondary:active {
-      background: #334155;
+      background: var(--btn-sec-hover);
     }
     .btn-primary {
       padding: 12px;
@@ -440,7 +509,7 @@
       margin-top: auto;
       padding: 20px 0 10px 0;
       font-size: 12px;
-      color: #475569;
+      color: var(--text-muted);
       text-align: center;
     }
   </style>
@@ -453,9 +522,14 @@
           <span class="pulse-dot"></span>
           OFFLINE ED25519 CIPHER
         </div>
-        <button id="btnOpenSettings" class="btn-icon" title="Cài đặt Đám Mây GitHub">
-          <span>⚙️</span> <span id="cloudPill" class="cloud-pill disconnected">Cloud Chưa Bật</span>
-        </button>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="btnThemeToggle" class="btn-icon" title="Chuyển chế độ Sáng / Tối" style="padding:6px 10px;">
+            <span id="themeIcon">☀️</span>
+          </button>
+          <button id="btnOpenSettings" class="btn-icon" title="Cài đặt Đám Mây GitHub">
+            <span>⚙️</span> <span id="cloudPill" class="cloud-pill disconnected">Cloud Chưa Bật</span>
+          </button>
+        </div>
       </div>
       <h1>PCCare LicGen Mobile</h1>
       <p class="subtitle">Thiên Phát Tech &bull; Trình tạo bản quyền di động</p>
@@ -1310,6 +1384,38 @@
         btnConfirmRevoke.disabled = false;
       }
     });
+
+    // ── Dark / Light Theme Toggle ─────────────────────────────────────────────
+    const btnThemeToggle = document.getElementById('btnThemeToggle');
+    const themeIcon = document.getElementById('themeIcon');
+    const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+        if (themeIcon) themeIcon.textContent = '🌙';
+        if (btnThemeToggle) btnThemeToggle.title = 'Chuyển sang giao diện Tối';
+        if (metaThemeColor) metaThemeColor.setAttribute('content', '#f1f5f9');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+        if (themeIcon) themeIcon.textContent = '☀️';
+        if (btnThemeToggle) btnThemeToggle.title = 'Chuyển sang giao diện Sáng';
+        if (metaThemeColor) metaThemeColor.setAttribute('content', '#0f172a');
+      }
+    }
+
+    const savedTheme = localStorage.getItem('licgen_theme') || 'dark';
+    applyTheme(savedTheme);
+
+    if (btnThemeToggle) {
+      btnThemeToggle.addEventListener('click', () => {
+        const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        const nextTheme = isLight ? 'dark' : 'light';
+        localStorage.setItem('licgen_theme', nextTheme);
+        applyTheme(nextTheme);
+        showToast(nextTheme === 'light' ? '☀️ Đã chuyển sang giao diện Sáng' : '🌙 Đã chuyển sang giao diện Tối');
+      });
+    }
 
     loadHistory();
     updateCloudPill();
